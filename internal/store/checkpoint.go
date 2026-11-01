@@ -24,6 +24,7 @@ type Checkpoint struct {
 	writer    *bufio.Writer
 	syncEvery int
 	pending   int
+	encoder   resultEncoder
 }
 
 func OpenCheckpoint(path string, resume, force bool, syncEvery int, maxResults int) (*Checkpoint, map[string]CheckpointEntry, error) {
@@ -171,17 +172,11 @@ func (c *Checkpoint) Replay(emit func(model.Result) error) error {
 }
 
 func (c *Checkpoint) Write(result model.Result) error {
-	data, err := json.Marshal(result)
+	record, err := c.encoder.encode(result)
 	if err != nil {
 		return err
 	}
-	if len(data) > MaxResultBytes {
-		return fmt.Errorf("serialized checkpoint result exceeds %d bytes", MaxResultBytes)
-	}
-	if _, err := c.writer.Write(data); err != nil {
-		return err
-	}
-	if err := c.writer.WriteByte('\n'); err != nil {
+	if _, err := c.writer.Write(record); err != nil {
 		return err
 	}
 	c.pending++

@@ -152,6 +152,9 @@
         "rotation_samples": {
           "type": "integer"
         },
+        "save_gzip": {
+          "type": "boolean"
+        },
         "save_status": {
           "type": "string"
         },

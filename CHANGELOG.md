@@ -6,6 +6,10 @@ All notable changes to NetVex are documented in this file. The project uses
 
 ## [Unreleased]
 
+### Added
+
+- `--save-gzip` stores runs compressed. Every command reads both formats.
+
 ### Changed
 
 - `--keep-partial` now also publishes saved runs and reports after an interruption,
@@ -19,9 +23,12 @@ All notable changes to NetVex are documented in this file. The project uses
 - `--expect-json` paths accept array indexes, as in `items.0.id=7`.
 - `doctor` reports effective prescreen workers.
 - `--output-status` accepts a comma-separated list.
+- Saving results reuses one buffer, removing most per-result allocation.
 
 ### Fixed
 
+- `--save-status` was refused when saving came from the configuration or
+  `NETVEX_SAVE` rather than the `--save` flag.
 - `--rate` lost capacity on Windows, where timer overshoot exceeded the catch-up
   window: 5,000/s delivered 3,439/s.
 - Commit history on `main` after `427e7fe` was rewritten to remove co-author

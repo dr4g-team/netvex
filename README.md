@@ -383,7 +383,7 @@ Environment configuration covers every persistent engine setting:
 | Response qualification | `NETVEX_MIN_RESPONSE_BYTES`, `NETVEX_MIN_THROUGHPUT_KBPS`, `NETVEX_REQUIRE_TEXT`, `NETVEX_REJECT_TEXT`, `NETVEX_EXPECT_JSON`, `NETVEX_EXPECTED_BODY_SHA256`, `NETVEX_ANONYMITY_BASELINE_IP`, `NETVEX_EXPECT_COUNTRY`, `NETVEX_PROBE_UDP` |
 | TLS trust | `NETVEX_CA_BUNDLE`, `NETVEX_PROXY_CA_BUNDLE` |
 | Resource limits | `NETVEX_MAX_INPUT_BYTES`, `NETVEX_MAX_INPUT_ENTRIES`, `NETVEX_MAX_RESPONSE_BYTES`, `NETVEX_INTELLIGENCE_BODY_BYTES` |
-| Persistence and metadata | `NETVEX_DATA_DIR`, `NETVEX_SAVE`, `NETVEX_METADATA_FILE` |
+| Persistence and metadata | `NETVEX_DATA_DIR`, `NETVEX_SAVE`, `NETVEX_SAVE_GZIP`, `NETVEX_METADATA_FILE` |
 
 List values are comma-separated. Boolean values use Go boolean syntax such as
 `true` or `false`. Invalid environment values stop execution before network
@@ -447,7 +447,8 @@ in a row, workers pause for a bounded time and proxies that failed meanwhile bec
 of dead proxies. Failures before the next probe keep their classification.
 
 `--save-status ok,unreliable` keeps only those results on disk while summaries
-still count everything. `netvex diff [BASE [CURRENT]]` compares two saved runs,
+still count everything. `--save-gzip` compresses saved runs, which matters on large
+lists because each result takes about 950 bytes; every command reads both formats. `netvex diff [BASE [CURRENT]]` compares two saved runs,
 by default the two newest, and reports proxies that died, revived, appeared,
 disappeared, or changed median latency beyond `--latency-change` percent.
 

@@ -366,6 +366,7 @@ type RunConfiguration struct {
 	ExpectCountries   []string `json:"expect_countries,omitempty"`
 	CanaryInterval    string   `json:"canary_interval,omitempty"`
 	SaveStatus        string   `json:"save_status,omitempty"`
+	SaveGzip          bool     `json:"save_gzip,omitempty"`
 	Prescreen         bool     `json:"prescreen,omitempty"`
 	PrescreenWorkers  int      `json:"prescreen_concurrency,omitempty"`
 	PrescreenRetries  int      `json:"prescreen_retries,omitempty"`

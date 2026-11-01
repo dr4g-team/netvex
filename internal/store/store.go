@@ -2,6 +2,8 @@ package store
 
 import (
 	"bufio"
+	"bytes"
+	"compress/gzip"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -20,30 +22,83 @@ import (
 )
 
 type RunWriter struct {
-	ID     string
-	dir    string
-	part   string
-	final  string
-	f      *os.File
-	w      *bufio.Writer
-	closed bool
+	ID      string
+	dir     string
+	part    string
+	final   string
+	f       *os.File
+	gz      *gzip.Writer
+	w       *bufio.Writer
+	encoder resultEncoder
+	closed  bool
 }
 
-const MaxResultBytes = 16 << 20
+const (
+	MaxResultBytes = 16 << 20
+	runSuffix      = ".jsonl"
+	gzipRunSuffix  = ".jsonl.gz"
+	summarySuffix  = ".summary.json"
+)
 
-func NewRunWriter(dataDir string) (*RunWriter, error) {
+// resultEncoder reuses one buffer across results. Saving is the largest source of
+// allocation in a big run, and json.Marshal copies every record it returns.
+type resultEncoder struct {
+	buffer  bytes.Buffer
+	encoder *json.Encoder
+}
+
+// encode returns one newline-terminated record, valid until the next call.
+func (e *resultEncoder) encode(value any) ([]byte, error) {
+	if e.encoder == nil {
+		e.encoder = json.NewEncoder(&e.buffer)
+	}
+	e.buffer.Reset()
+	if err := e.encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	if e.buffer.Len() > MaxResultBytes {
+		return nil, fmt.Errorf("serialized result exceeds %d bytes", MaxResultBytes)
+	}
+	return e.buffer.Bytes(), nil
+}
+
+func NewRunWriter(dataDir string) (*RunWriter, error) { return newRunWriter(dataDir, false) }
+
+// NewCompressedRunWriter stores results as gzip. Readers detect the format, so
+// every command handles both kinds of run.
+func NewCompressedRunWriter(dataDir string) (*RunWriter, error) { return newRunWriter(dataDir, true) }
+
+func newRunWriter(dataDir string, compress bool) (*RunWriter, error) {
 	dir := filepath.Join(dataDir, "runs")
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, fmt.Errorf("create history directory: %w", err)
 	}
 	id := newID()
-	part := filepath.Join(dir, id+".jsonl.part")
-	final := filepath.Join(dir, id+".jsonl")
+	suffix := runSuffix
+	if compress {
+		suffix = gzipRunSuffix
+	}
+	part := filepath.Join(dir, id+suffix+".part")
+	final := filepath.Join(dir, id+suffix)
 	f, err := os.OpenFile(part, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err != nil {
 		return nil, fmt.Errorf("create run: %w", err)
 	}
-	return &RunWriter{ID: id, dir: dir, part: part, final: final, f: f, w: bufio.NewWriterSize(f, 128<<10)}, nil
+	writer := &RunWriter{ID: id, dir: dir, part: part, final: final, f: f}
+	var sink io.Writer = f
+	if compress {
+		// BestSpeed: this runs on the result loop, and run files are highly
+		// repetitive, so higher levels cost far more time than they save.
+		writer.gz, err = gzip.NewWriterLevel(f, gzip.BestSpeed)
+		if err != nil {
+			_ = f.Close()
+			_ = os.Remove(part)
+			return nil, err
+		}
+		sink = writer.gz
+	}
+	writer.w = bufio.NewWriterSize(sink, 128<<10)
+	return writer, nil
 }
 
 func newID() string {
@@ -59,17 +114,12 @@ func (r *RunWriter) Write(result model.Result) error {
 	if err := validateResult(result); err != nil {
 		return err
 	}
-	b, err := json.Marshal(result)
+	record, err := r.encoder.encode(result)
 	if err != nil {
 		return err
 	}
-	if len(b) > MaxResultBytes {
-		return fmt.Errorf("serialized result exceeds %d bytes", MaxResultBytes)
-	}
-	if _, err = r.w.Write(b); err != nil {
-		return err
-	}
-	return r.w.WriteByte('\n')
+	_, err = r.w.Write(record)
+	return err
 }
 
 func (r *RunWriter) Commit(summary model.RunSummary) error {
@@ -77,8 +127,8 @@ func (r *RunWriter) Commit(summary model.RunSummary) error {
 		return errors.New("run writer is closed")
 	}
 	r.closed = true
-	metaPart := filepath.Join(r.dir, r.ID+".summary.json.part")
-	metaFinal := filepath.Join(r.dir, r.ID+".summary.json")
+	metaPart := filepath.Join(r.dir, r.ID+summarySuffix+".part")
+	metaFinal := filepath.Join(r.dir, r.ID+summarySuffix)
 	committed := false
 	resultPublished := false
 	metaPublished := false
@@ -98,6 +148,12 @@ func (r *RunWriter) Commit(summary model.RunSummary) error {
 	if err := r.w.Flush(); err != nil {
 		_ = r.f.Close()
 		return err
+	}
+	if r.gz != nil {
+		if err := r.gz.Close(); err != nil {
+			_ = r.f.Close()
+			return err
+		}
 	}
 	if err := r.f.Sync(); err != nil {
 		_ = r.f.Close()
@@ -164,7 +220,7 @@ func ResolveRun(dataDir, id string) (string, error) {
 		}
 		names := []string{}
 		for _, e := range entries {
-			if !e.IsDir() && strings.HasSuffix(e.Name(), ".jsonl") {
+			if !e.IsDir() && isRunFile(e.Name()) {
 				names = append(names, e.Name())
 			}
 		}
@@ -175,15 +231,22 @@ func ResolveRun(dataDir, id string) (string, error) {
 		return filepath.Join(dir, names[len(names)-1]), nil
 	}
 	if strings.ContainsAny(id, "/\\") {
-		if filepath.Ext(id) == ".jsonl" {
+		if isRunFile(id) {
 			return id, nil
 		}
-		return "", errors.New("run path must name a .jsonl file")
+		return "", errors.New("run path must name a .jsonl or .jsonl.gz file")
 	}
-	if !strings.HasSuffix(id, ".jsonl") {
-		id += ".jsonl"
+	base := filepath.Join(dir, strings.TrimSuffix(strings.TrimSuffix(id, ".gz"), runSuffix))
+	if _, err := os.Stat(base + runSuffix); err != nil {
+		if _, gzipErr := os.Stat(base + gzipRunSuffix); gzipErr == nil {
+			return base + gzipRunSuffix, nil
+		}
 	}
-	return filepath.Join(dir, id), nil
+	return base + runSuffix, nil
+}
+
+func isRunFile(name string) bool {
+	return strings.HasSuffix(name, runSuffix) || strings.HasSuffix(name, gzipRunSuffix)
 }
 
 func ReadResults(path string, emit func(model.Result) error) error {
@@ -192,7 +255,16 @@ func ReadResults(path string, emit func(model.Result) error) error {
 		return fmt.Errorf("open run: %w", err)
 	}
 	defer f.Close()
-	return decodeResults(f, emit)
+	reader := bufio.NewReader(f)
+	if magic, _ := reader.Peek(2); len(magic) == 2 && magic[0] == 0x1f && magic[1] == 0x8b {
+		decompressed, err := gzip.NewReader(reader)
+		if err != nil {
+			return fmt.Errorf("open compressed run: %w", err)
+		}
+		defer decompressed.Close()
+		return decodeResults(decompressed, emit)
+	}
+	return decodeResults(reader, emit)
 }
 
 func decodeResults(reader io.Reader, emit func(model.Result) error) error {
@@ -240,7 +312,7 @@ func hasControl(value string) bool { return strings.IndexFunc(value, unicode.IsC
 
 func ReadSummary(path string) (model.RunSummary, error) {
 	var s model.RunSummary
-	f, err := os.Open(strings.TrimSuffix(path, ".jsonl") + ".summary.json")
+	f, err := os.Open(strings.TrimSuffix(strings.TrimSuffix(path, ".gz"), runSuffix) + summarySuffix)
 	if err != nil {
 		return s, err
 	}
@@ -318,7 +390,7 @@ func PruneRuns(dataDir string, keep int, execute bool) ([]string, error) {
 		return candidates, nil
 	}
 	for _, id := range candidates {
-		for _, suffix := range []string{".jsonl", ".summary.json"} {
+		for _, suffix := range []string{runSuffix, gzipRunSuffix, summarySuffix} {
 			if err := os.Remove(filepath.Join(dir, id+suffix)); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return nil, fmt.Errorf("remove run %s: %w", id, err)
 			}

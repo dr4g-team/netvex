@@ -81,6 +81,7 @@ type Config struct {
 	AllowedHosts      []string                 `json:"allowed_target_hosts"`
 	DataDir           string                   `json:"data_dir"`
 	Save              bool                     `json:"save"`
+	SaveGzip          bool                     `json:"save_gzip"`
 	ProgressInterval  time.Duration            `json:"-"`
 	ProgressRaw       string                   `json:"progress_interval"`
 }
@@ -240,6 +241,7 @@ func applyEnv(c *Config) error {
 		{"NETVEX_PROBE_UDP", &c.ProbeUDP},
 		{"NETVEX_STOP_ON_SUCCESS", &c.StopOnSuccess},
 		{"NETVEX_SAVE", &c.Save},
+		{"NETVEX_SAVE_GZIP", &c.SaveGzip},
 		{"NETVEX_TARGET_MATRIX", &c.TargetMatrix},
 	} {
 		if err := envBool(item.name, item.dst); err != nil {

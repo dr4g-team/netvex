@@ -83,3 +83,109 @@ func TestListRunsNewestFirst(t *testing.T) {
 		t.Fatalf("unexpected retained runs: %+v", runs)
 	}
 }
+
+func benchmarkResult() model.Result {
+	return model.Result{SchemaVersion: model.SchemaVersion, ID: "0123456789abcdef01234567", Proxy: "http://203.0.113.9:8080", Endpoint: "203.0.113.9:8080", Protocol: model.ProtocolHTTP, Status: model.StatusTimeout, Attempts: 1, RequiredSuccesses: 1,
+		Observations: []model.Observation{{Attempt: 1, Protocol: model.ProtocolHTTP, Target: "https://example.com/", Status: model.StatusTimeout, Stage: model.StageConnect, Code: "deadline_exceeded", Message: "operation timed out", Anonymity: "unavailable", Timings: model.Timings{TotalMS: 1000.5}}},
+		Rotation:     model.RotationProfile{Classification: "unavailable"}, Score: model.Score{Confidence: "insufficient", Reason: "at least two measurements are required for a numeric score"}}
+}
+
+func BenchmarkRunWriter(b *testing.B) {
+	writer, err := NewRunWriter(b.TempDir())
+	if err != nil {
+		b.Fatal(err)
+	}
+	defer writer.Abort()
+	result := benchmarkResult()
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := writer.Write(result); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func TestCompressedRunsBehaveLikePlainRuns(t *testing.T) {
+	dir := t.TempDir()
+	plain, err := NewRunWriter(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plain.Write(benchmarkResult()); err != nil {
+		t.Fatal(err)
+	}
+	if err := plain.Commit(model.RunSummary{RunID: plain.ID, Processed: 1}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(2 * time.Millisecond)
+	compressed, err := NewCompressedRunWriter(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if err := compressed.Write(benchmarkResult()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := compressed.Commit(model.RunSummary{RunID: compressed.ID, Processed: 3}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(compressed.Path(), ".jsonl.gz") {
+		t.Fatalf("path=%s", compressed.Path())
+	}
+	raw, err := os.ReadFile(compressed.Path())
+	if err != nil || raw[0] != 0x1f || raw[1] != 0x8b {
+		t.Fatalf("not gzip: err=%v", err)
+	}
+	for _, reference := range []string{"latest", compressed.ID, compressed.ID + ".jsonl", compressed.ID + ".jsonl.gz", compressed.Path()} {
+		path, err := ResolveRun(dir, reference)
+		if err != nil || path != compressed.Path() {
+			t.Fatalf("%s resolved to %s err=%v", reference, path, err)
+		}
+	}
+	count := 0
+	if err := ReadResults(compressed.Path(), func(model.Result) error { count++; return nil }); err != nil || count != 3 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+	summary, err := ReadSummary(compressed.Path())
+	if err != nil || summary.Processed != 3 {
+		t.Fatalf("summary=%+v err=%v", summary, err)
+	}
+	if runs, err := ListRuns(dir, 10); err != nil || len(runs) != 2 {
+		t.Fatalf("runs=%d err=%v", len(runs), err)
+	}
+	if _, err := PruneRuns(dir, 0, true); err != nil {
+		t.Fatal(err)
+	}
+	if entries, err := os.ReadDir(filepath.Join(dir, "runs")); err != nil || len(entries) != 0 {
+		t.Fatalf("prune left %v err=%v", entries, err)
+	}
+}
+
+func TestCorruptCompressedRunIsReported(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "run.jsonl.gz")
+	if err := os.WriteFile(path, []byte{0x1f, 0x8b, 0, 0}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReadResults(path, func(model.Result) error { return nil }); err == nil {
+		t.Fatal("corrupt run accepted")
+	}
+	if _, err := ResolveRun(t.TempDir(), "/tmp/run.txt"); err == nil {
+		t.Fatal("non-run path accepted")
+	}
+}
+
+func TestOversizedResultIsRefusedWithoutStoppingTheWriter(t *testing.T) {
+	writer, err := NewRunWriter(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer writer.Abort()
+	var encoder resultEncoder
+	if _, err := encoder.encode(strings.Repeat("x", MaxResultBytes+1)); err == nil {
+		t.Fatal("oversized record accepted")
+	}
+	if err := writer.Write(benchmarkResult()); err != nil {
+		t.Fatal(err)
+	}
+}

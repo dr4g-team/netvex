@@ -152,6 +152,15 @@ func (c CLI) newCheckSession(args []string, detailed bool) (*checkSession, int) 
 		fmt.Fprintln(c.Stderr, "configuration error:", err)
 		return nil, ExitUsage
 	}
+	// Checked after loading because saving may come from the file or environment.
+	if s.options.saveStatus != "" && !s.config.Save {
+		fmt.Fprintln(c.Stderr, "save-status requires save")
+		return nil, ExitUsage
+	}
+	if s.options.saveGzip && !s.config.Save {
+		fmt.Fprintln(c.Stderr, "save-gzip requires save")
+		return nil, ExitUsage
+	}
 	if s.options.label == "" && s.config.ScenarioName != "" {
 		s.options.label = s.config.ScenarioName
 	}
@@ -196,9 +205,6 @@ func (s *checkSession) validateOptions() error {
 	var err error
 	if s.workingTemplate, err = parseWorkingTemplate(o.workingTemplate); err != nil {
 		return err
-	}
-	if o.saveStatus != "" && !o.save {
-		return errors.New("save-status requires save")
 	}
 	if s.saveStatuses, err = parseStatusList(o.saveStatus); err != nil {
 		return err
@@ -390,7 +396,11 @@ func (s *checkSession) openHistory(context.Context) int {
 	}
 	if s.config.Save {
 		var err error
-		if s.history, err = store.NewRunWriter(s.config.DataDir); err != nil {
+		newWriter := store.NewRunWriter
+		if s.config.SaveGzip {
+			newWriter = store.NewCompressedRunWriter
+		}
+		if s.history, err = newWriter(s.config.DataDir); err != nil {
 			fmt.Fprintln(s.cli.Stderr, "history error:", err)
 			return ExitOperational
 		}

@@ -396,3 +396,40 @@ func TestDoctorReportsPrescreenWorkers(t *testing.T) {
 		t.Fatalf("code=%d out=%q diag=%q", code, out, diag)
 	}
 }
+
+func TestSaveGzipWorksWithEveryReader(t *testing.T) {
+	proxy, target := connectProxy(t), echoTarget(t)
+	dir := t.TempDir()
+	if code, _, diag := run(checkArgs(target, "--save", "--save-gzip", "--data-dir", dir), proxy+"\n"); code != ExitOK {
+		t.Fatalf("code=%d diag=%q", code, diag)
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, "runs", "*.jsonl.gz"))
+	if err != nil || len(matches) != 1 {
+		t.Fatalf("matches=%v err=%v", matches, err)
+	}
+	assertPrivateMode(t, matches[0])
+	for _, args := range [][]string{
+		{"results", "--data-dir", dir, "--format", "txt"},
+		{"export", "--data-dir", dir, "--format", "txt"},
+		{"stats", "--data-dir", dir},
+		{"pool", "--data-dir", dir},
+		{"history", "--data-dir", dir},
+	} {
+		if code, out, diag := run(args, ""); code != ExitOK || out == "" {
+			t.Fatalf("%v code=%d out=%q diag=%q", args, code, out, diag)
+		}
+	}
+	if code, _, _ := run(checkArgs(target, "--save-gzip"), proxy+"\n"); code != ExitUsage {
+		t.Fatalf("save-gzip without save code=%d", code)
+	}
+}
+
+func TestSaveStatusAcceptsSavingFromEnvironment(t *testing.T) {
+	proxy, target := connectProxy(t), echoTarget(t)
+	dir := t.TempDir()
+	t.Setenv("NETVEX_SAVE", "true")
+	t.Setenv("NETVEX_DATA_DIR", dir)
+	if code, _, diag := run(checkArgs(target, "--save-status", "ok"), proxy+"\n"); code != ExitOK {
+		t.Fatalf("code=%d diag=%q", code, diag)
+	}
+}

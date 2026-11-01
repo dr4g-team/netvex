@@ -32,7 +32,7 @@ type checkOptions struct {
 	prescreenTimeout, canaryInterval                            string
 	workingDir, workingTemplate, saveStatus                     string
 	cpuProfile, memProfile                                      string
-	noProgress, resumeAnyConfig, probeUDP                       bool
+	noProgress, resumeAnyConfig, probeUDP, saveGzip             bool
 	expectCountries                                             stringsFlag
 	dataDir                                                     string
 	maxRedirects                                                int
@@ -120,6 +120,7 @@ func (c CLI) addCheckFlags(fs *flag.FlagSet, o *checkOptions) {
 	fs.StringVar(&o.workingDir, "working-dir", "", "write validated proxies to one mode-0600 file per protocol in this directory")
 	fs.StringVar(&o.workingTemplate, "working-template", "", "working line format: uri, hostport, colon, or a template using {protocol} {user} {pass} {host} {port} {hostport} {uri}")
 	fs.StringVar(&o.saveStatus, "save-status", "", "comma-separated statuses persisted by --save; default all")
+	fs.BoolVar(&o.saveGzip, "save-gzip", false, "compress saved runs; every command reads both formats")
 	fs.StringVar(&o.cpuProfile, "cpu-profile", "", "write a pprof CPU profile of this run")
 	fs.StringVar(&o.memProfile, "mem-profile", "", "write a pprof allocation profile when this run ends")
 	fs.BoolVar(&o.noProgress, "no-progress", false, "disable the live progress line on terminals")
@@ -260,6 +261,7 @@ func applyEvidenceFlags(cfg *config.Config, o checkOptions) {
 	override(&cfg.ProbeUDP, o.probeUDP, o.probeUDP || o.explicit["probe-udp"])
 	override(&cfg.TLSClassicalKEX, o.tlsClassicalKEX, o.tlsClassicalKEX || o.explicit["tls-classical-kex"])
 	override(&cfg.Save, o.save, o.save || o.explicit["save"])
+	override(&cfg.SaveGzip, o.saveGzip, o.saveGzip || o.explicit["save-gzip"])
 }
 
 func applyTimingFlags(cfg *config.Config, o checkOptions) {
@@ -391,7 +393,7 @@ func runConfiguration(cfg config.Config, proto model.Protocol, o checkOptions) m
 		Repeat: cfg.Repeat, MinSuccessRate: cfg.MinSuccessRate, ConnectTimeout: cfg.ConnectTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(), AutoProbeTimeout: cfg.AutoProbeTimeout.String(),
 		RetryBackoff: cfg.RetryBackoff.String(), StopOnSuccess: cfg.StopOnSuccess,
 		RetryPermanent: cfg.RetryPermanent, AllowRemoteDNS: cfg.AllowRemoteDNS, AllowPrivateProxy: cfg.AllowPrivateProxy,
-		ProbeUDP: cfg.ProbeUDP, ExpectCountries: cfg.ExpectCountries, CanaryInterval: canaryInterval(cfg), SaveStatus: o.saveStatus,
+		ProbeUDP: cfg.ProbeUDP, ExpectCountries: cfg.ExpectCountries, CanaryInterval: canaryInterval(cfg), SaveStatus: o.saveStatus, SaveGzip: cfg.Save && cfg.SaveGzip,
 		SkipConnectRetry: cfg.SkipConnectRetry, TLSClassicalKEX: cfg.TLSClassicalKEX, Prescreen: cfg.Prescreen, PrescreenWorkers: prescreenWorkers(cfg), PrescreenRetries: cfg.PrescreenRetries, ProxyDNSCacheTTL: cfg.ProxyDNSCacheTTL.String(),
 		MaxResponseBytes: cfg.MaxResponseBytes, IntelligenceBytes: min(cfg.IntelligenceBytes, cfg.MaxResponseBytes), MinResponseBytes: cfg.MinResponseBytes, MinThroughput: cfg.MinThroughputKBPS,
 		ContentRules:    len(cfg.RequireText) + len(cfg.RejectText) + len(cfg.ExpectJSON),
