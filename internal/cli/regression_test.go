@@ -282,7 +282,7 @@ func TestPrescreenFlagBounds(t *testing.T) {
 			t.Fatalf("%v code=%d", args, code)
 		}
 	}
-	if workers := boundedPrescreenWorkers(1<<40, 128); workers < 1 {
+	if workers := boundedPrescreenWorkers(1<<30, 128); workers < 1 {
 		t.Fatalf("workers=%d", workers)
 	}
 }

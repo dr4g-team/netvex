@@ -127,9 +127,7 @@ func (c *Checker) inspectResponse(obs *model.Observation, resp *http.Response, r
 		obs.BodyCapturedBytes = int64(len(body))
 	}
 	obs.BodySHA256 = bodySHA
-	if obs.BodyBytes > 0 && bodyDuration > 0 {
-		obs.ThroughputKBPS = float64(obs.BodyBytes) / 1000 / bodyDuration.Seconds()
-	}
+	obs.ThroughputKBPS = throughputKBPS(obs.BodyBytes, bodyDuration)
 	if readErr != nil {
 		return &protocol.Error{Stage: model.StageResponse, Status: statusFor(readErr), Code: "body_read", Detail: "failed to read response body", Err: readErr}
 	}
@@ -174,6 +172,20 @@ func (c *Checker) inspectResponse(obs *model.Observation, resp *http.Response, r
 		}
 	}
 	return nil
+}
+
+// throughputKBPS treats a zero duration as one coarse clock tick. Windows clocks
+// can report no elapsed time for a fast transfer, and calling that zero throughput
+// would fail --min-throughput-kbps on the fastest proxies. The tick gives a lower
+// bound, so the result never overstates what was measured.
+func throughputKBPS(bytes int64, duration time.Duration) float64 {
+	if bytes <= 0 {
+		return 0
+	}
+	if duration <= 0 {
+		duration = time.Millisecond
+	}
+	return float64(bytes) / 1000 / duration.Seconds()
 }
 
 func (c *Checker) followRedirect(ctx context.Context, p model.Proxy, u *url.URL, left int, prior model.Observation, rules compiledResponseRules) (model.Observation, error) {

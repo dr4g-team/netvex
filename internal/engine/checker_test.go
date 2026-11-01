@@ -1419,3 +1419,15 @@ func TestExitFamilyCapabilities(t *testing.T) {
 		t.Fatal("no evidence must mean no capabilities")
 	}
 }
+
+func TestThroughputSurvivesCoarseClocks(t *testing.T) {
+	if got := throughputKBPS(20_000, 0); got != 20_000 {
+		t.Fatalf("zero duration: %v", got)
+	}
+	if got := throughputKBPS(20_000, 2*time.Second); got != 10 {
+		t.Fatalf("measured duration: %v", got)
+	}
+	if got := throughputKBPS(0, 0); got != 0 {
+		t.Fatalf("empty body: %v", got)
+	}
+}

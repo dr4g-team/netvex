@@ -55,6 +55,10 @@ cross-check:
 		else \
 			CGO_ENABLED=0 GOOS="$$os" GOARCH="$$arch" go build -mod=readonly -trimpath -buildvcs=false -o "$$tmp/netvex-$$os-$$arch$$suffix" ./cmd/netvex; \
 		fi; \
+	done; \
+	for target in linux/386 linux/arm windows/amd64 darwin/arm64; do \
+		printf 'vetting tests for %s\n' "$$target"; \
+		CGO_ENABLED=0 GOOS="$${target%/*}" GOARCH="$${target#*/}" go vet ./...; \
 	done
 
 reproducibility-check:
