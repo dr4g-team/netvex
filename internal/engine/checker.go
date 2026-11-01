@@ -46,6 +46,7 @@ type Checker struct {
 	IdentityKey       func() []byte
 
 	expectCountries    map[string]struct{}
+	certificatePins    map[string]struct{}
 	canaryProbe        func(context.Context, string) model.TargetHealth
 	canaryDown         atomic.Pointer[map[string]struct{}]
 	localPauseUntil    atomic.Int64
@@ -86,6 +87,12 @@ func NewChecker(c config.Config) *Checker {
 		checker.expectCountries = make(map[string]struct{}, len(c.ExpectCountries))
 		for _, country := range c.ExpectCountries {
 			checker.expectCountries[strings.ToUpper(country)] = struct{}{}
+		}
+	}
+	if len(c.PinSHA256) > 0 {
+		checker.certificatePins = make(map[string]struct{}, len(c.PinSHA256))
+		for _, pin := range c.PinSHA256 {
+			checker.certificatePins[strings.ToLower(pin)] = struct{}{}
 		}
 	}
 	for _, rule := range c.RequireText {

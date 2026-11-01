@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"flag"
 	"fmt"
 	"net"
 	"os"
@@ -431,5 +432,40 @@ func TestSaveStatusAcceptsSavingFromEnvironment(t *testing.T) {
 	t.Setenv("NETVEX_DATA_DIR", dir)
 	if code, _, diag := run(checkArgs(target, "--save-status", "ok"), proxy+"\n"); code != ExitOK {
 		t.Fatalf("code=%d diag=%q", code, diag)
+	}
+}
+
+func TestCheckHelpGroupsEveryFlagOnce(t *testing.T) {
+	fs, _ := CLI{}.newFlagSet("check")
+	var options checkOptions
+	CLI{}.addCheckFlags(fs, &options)
+	seen := map[string]string{}
+	for _, group := range checkFlagGroups {
+		for _, name := range group.names {
+			if previous, duplicate := seen[name]; duplicate {
+				t.Fatalf("%s is in %q and %q", name, previous, group.title)
+			}
+			if fs.Lookup(name) == nil {
+				t.Fatalf("%s in %q is not a flag", name, group.title)
+			}
+			seen[name] = group.title
+		}
+	}
+	fs.VisitAll(func(option *flag.Flag) {
+		if _, grouped := seen[option.Name]; !grouped {
+			t.Fatalf("--%s has no help group", option.Name)
+		}
+	})
+	code, out, _ := run([]string{"check", "--help"}, "")
+	if code != ExitOK || !strings.Contains(out, "Speed and concurrency:") || !strings.Contains(out, "-prescreen-concurrency") || !strings.Contains(out, `(default "all")`) {
+		t.Fatalf("code=%d out=%q", code, out)
+	}
+}
+
+func TestCheckpointRejectsChangedCertificatePins(t *testing.T) {
+	first := checkpointFingerprint(config.Config{Targets: []string{"https://a.test/"}}, model.ProtocolHTTP)
+	second := checkpointFingerprint(config.Config{Targets: []string{"https://a.test/"}, PinSHA256: []string{strings.Repeat("a", 64)}}, model.ProtocolHTTP)
+	if first == second {
+		t.Fatal("certificate pins must be part of the verdict fingerprint")
 	}
 }

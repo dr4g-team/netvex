@@ -10,9 +10,13 @@ All notable changes to NetVex are documented in this file. The project uses
 
 - `--save-gzip` stores runs compressed. Every command reads both formats.
 - HTTP Digest proxy authentication with MD5 and SHA-256 over CONNECT.
+- `--pin-sha256` detects TLS interception by a CA this host trusts.
 
 ### Changed
 
+- **Breaking:** redirects from HTTPS to plain HTTP are refused with
+  `redirect_downgrade`. `--allow-redirect-downgrade` restores them.
+- `check --help` groups options by task.
 - `--keep-partial` now also publishes saved runs and reports after an interruption,
   marked `interrupted` in the summary. Result schema version 7.
 - `inspect` no longer writes the proxy, including credentials, to a temporary file,

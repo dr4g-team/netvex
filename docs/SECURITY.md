@@ -65,8 +65,13 @@ Text chosen by a remote proxy is bounded and stripped of control characters befo
 it reaches a result, so a hostile proxy cannot fail a run's persistence or write
 escape sequences to a terminal.
 
-Explicit exceptions `--allow-private-targets`, `--allow-private-proxies`, and
-`--allow-remote-dns` reduce protection and exist for controlled labs. Private-target mode can reach internal
+Chain validation accepts any CA this host trusts, so it cannot see interception by
+a corporate or malicious trusted root. `--pin-sha256` closes that gap for known
+destinations. Redirects from HTTPS to HTTP are refused because they would continue
+validation over plaintext the proxy can rewrite.
+
+Explicit exceptions `--allow-private-targets`, `--allow-private-proxies`,
+`--allow-redirect-downgrade`, and `--allow-remote-dns` reduce protection and exist for controlled labs. Private-target mode can reach internal
 services through supplied proxies, but invalid, unspecified, and multicast
 service addresses remain rejected. Remote-DNS mode lets a proxy independently
 resolve HTTP CONNECT, forward HTTP, SOCKS4a, and SOCKS5 destinations, so split DNS or

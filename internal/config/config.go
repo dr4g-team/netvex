@@ -59,6 +59,8 @@ type Config struct {
 	AllowPrivate      bool                     `json:"allow_private_targets"`
 	AllowRemoteDNS    bool                     `json:"allow_remote_dns"`
 	AllowPrivateProxy bool                     `json:"allow_private_proxies"`
+	PinSHA256         []string                 `json:"pin_sha256,omitempty"`
+	AllowDowngrade    bool                     `json:"allow_redirect_downgrade"`
 	RetryPermanent    bool                     `json:"retry_permanent_failures"`
 	SkipConnectRetry  bool                     `json:"skip_connect_retry"`
 	TLSClassicalKEX   bool                     `json:"tls_classical_kex"`
@@ -182,197 +184,109 @@ func Load(path string) (Config, error) {
 	return c, c.Validate()
 }
 
+// applyEnv overlays NETVEX_* variables. A variable that is set but cannot be parsed
+// stops the run before any network activity.
 func applyEnv(c *Config) error {
-	for _, item := range []struct {
-		name string
-		dst  *int
-	}{
-		{"NETVEX_CONCURRENCY", &c.Concurrency},
-		{"NETVEX_QUEUE_SIZE", &c.QueueSize},
-		{"NETVEX_PER_TARGET_CONCURRENCY", &c.PerTarget},
-		{"NETVEX_REPEAT", &c.Repeat},
-		{"NETVEX_MAX_REDIRECTS", &c.MaxRedirects},
-		{"NETVEX_TARGET_QUORUM", &c.TargetQuorum},
-		{"NETVEX_ROTATION_SAMPLES", &c.RotationSamples},
-		{"NETVEX_MAX_INPUT_ENTRIES", &c.MaxInputEntries},
-		{"NETVEX_PRESCREEN_CONCURRENCY", &c.PrescreenWorkers},
-		{"NETVEX_PRESCREEN_RETRIES", &c.PrescreenRetries},
-	} {
-		if err := envInt(item.name, item.dst); err != nil {
-			return err
+	return errors.Join(
+		bindEnv(strconv.Atoi, []envBinding[int]{
+			{"NETVEX_CONCURRENCY", &c.Concurrency},
+			{"NETVEX_QUEUE_SIZE", &c.QueueSize},
+			{"NETVEX_PER_TARGET_CONCURRENCY", &c.PerTarget},
+			{"NETVEX_REPEAT", &c.Repeat},
+			{"NETVEX_MAX_REDIRECTS", &c.MaxRedirects},
+			{"NETVEX_TARGET_QUORUM", &c.TargetQuorum},
+			{"NETVEX_ROTATION_SAMPLES", &c.RotationSamples},
+			{"NETVEX_MAX_INPUT_ENTRIES", &c.MaxInputEntries},
+			{"NETVEX_PRESCREEN_CONCURRENCY", &c.PrescreenWorkers},
+			{"NETVEX_PRESCREEN_RETRIES", &c.PrescreenRetries},
+		}),
+		bindEnv(parseInt64, []envBinding[int64]{
+			{"NETVEX_MAX_INPUT_BYTES", &c.MaxInputBytes},
+			{"NETVEX_MAX_RESPONSE_BYTES", &c.MaxResponseBytes},
+			{"NETVEX_INTELLIGENCE_BODY_BYTES", &c.IntelligenceBytes},
+			{"NETVEX_MIN_RESPONSE_BYTES", &c.MinResponseBytes},
+		}),
+		bindEnv(parseFloat, []envBinding[float64]{
+			{"NETVEX_REQUESTS_PER_SECOND", &c.RateLimit},
+			{"NETVEX_MIN_SUCCESS_RATE", &c.MinSuccessRate},
+			{"NETVEX_MIN_THROUGHPUT_KBPS", &c.MinThroughputKBPS},
+		}),
+		bindEnv(strconv.ParseBool, []envBinding[bool]{
+			{"NETVEX_ALLOW_PRIVATE_TARGETS", &c.AllowPrivate},
+			{"NETVEX_ALLOW_REMOTE_DNS", &c.AllowRemoteDNS},
+			{"NETVEX_ALLOW_PRIVATE_PROXIES", &c.AllowPrivateProxy},
+			{"NETVEX_ALLOW_REDIRECT_DOWNGRADE", &c.AllowDowngrade},
+			{"NETVEX_RETRY_PERMANENT_FAILURES", &c.RetryPermanent},
+			{"NETVEX_SKIP_CONNECT_RETRY", &c.SkipConnectRetry},
+			{"NETVEX_TLS_CLASSICAL_KEX", &c.TLSClassicalKEX},
+			{"NETVEX_PRESCREEN", &c.Prescreen},
+			{"NETVEX_PROBE_UDP", &c.ProbeUDP},
+			{"NETVEX_STOP_ON_SUCCESS", &c.StopOnSuccess},
+			{"NETVEX_SAVE", &c.Save},
+			{"NETVEX_SAVE_GZIP", &c.SaveGzip},
+			{"NETVEX_TARGET_MATRIX", &c.TargetMatrix},
+		}),
+		bindEnv(parseText, []envBinding[string]{
+			{"NETVEX_CONNECT_TIMEOUT", &c.ConnectTimeoutRaw},
+			{"NETVEX_REQUEST_TIMEOUT", &c.RequestTimeoutRaw},
+			{"NETVEX_AUTO_PROBE_TIMEOUT", &c.AutoProbeRaw},
+			{"NETVEX_DATA_DIR", &c.DataDir},
+			{"NETVEX_METADATA_FILE", &c.MetadataFile},
+			{"NETVEX_CA_BUNDLE", &c.CABundle},
+			{"NETVEX_PROXY_CA_BUNDLE", &c.ProxyCABundle},
+			{"NETVEX_DNS_CACHE_TTL", &c.DNSCacheTTLRaw},
+			{"NETVEX_PROXY_DNS_CACHE_TTL", &c.ProxyDNSCacheRaw},
+			{"NETVEX_CANARY_INTERVAL", &c.CanaryRaw},
+			{"NETVEX_PRESCREEN_TIMEOUT", &c.PrescreenRaw},
+			{"NETVEX_RETRY_BACKOFF", &c.RetryBackoffRaw},
+			{"NETVEX_ROTATION_INTERVAL", &c.RotationRaw},
+			{"NETVEX_PROGRESS_INTERVAL", &c.ProgressRaw},
+			{"NETVEX_ANONYMITY_BASELINE_IP", &c.AnonymityBaseline},
+		}),
+		bindEnv(parseLowerText, []envBinding[string]{
+			{"NETVEX_EXPECTED_BODY_SHA256", &c.ExpectedBodySHA},
+			{"NETVEX_PREFLIGHT", &c.Preflight},
+		}),
+		bindEnv(parseList, []envBinding[[]string]{
+			{"NETVEX_TARGETS", &c.Targets},
+			{"NETVEX_ALLOWED_TARGET_HOSTS", &c.AllowedHosts},
+			{"NETVEX_REQUIRE_TEXT", &c.RequireText},
+			{"NETVEX_REJECT_TEXT", &c.RejectText},
+			{"NETVEX_EXPECT_JSON", &c.ExpectJSON},
+			{"NETVEX_EXPECT_COUNTRY", &c.ExpectCountries},
+			{"NETVEX_PIN_SHA256", &c.PinSHA256},
+		}),
+	)
+}
+
+type envBinding[T any] struct {
+	name   string
+	target *T
+}
+
+func bindEnv[T any](parse func(string) (T, error), bindings []envBinding[T]) error {
+	for _, binding := range bindings {
+		value := os.Getenv(binding.name)
+		if value == "" {
+			continue
 		}
-	}
-	for _, item := range []struct {
-		name string
-		dst  *int64
-	}{
-		{"NETVEX_MAX_INPUT_BYTES", &c.MaxInputBytes},
-		{"NETVEX_MAX_RESPONSE_BYTES", &c.MaxResponseBytes},
-		{"NETVEX_INTELLIGENCE_BODY_BYTES", &c.IntelligenceBytes},
-		{"NETVEX_MIN_RESPONSE_BYTES", &c.MinResponseBytes},
-	} {
-		if err := envInt64(item.name, item.dst); err != nil {
-			return err
+		parsed, err := parse(value)
+		if err != nil {
+			return fmt.Errorf("invalid %s: %w", binding.name, err)
 		}
-	}
-	for _, item := range []struct {
-		name string
-		dst  *float64
-	}{
-		{"NETVEX_REQUESTS_PER_SECOND", &c.RateLimit},
-		{"NETVEX_MIN_SUCCESS_RATE", &c.MinSuccessRate},
-		{"NETVEX_MIN_THROUGHPUT_KBPS", &c.MinThroughputKBPS},
-	} {
-		if err := envFloat(item.name, item.dst); err != nil {
-			return err
-		}
-	}
-	for _, item := range []struct {
-		name string
-		dst  *bool
-	}{
-		{"NETVEX_ALLOW_PRIVATE_TARGETS", &c.AllowPrivate},
-		{"NETVEX_ALLOW_REMOTE_DNS", &c.AllowRemoteDNS},
-		{"NETVEX_ALLOW_PRIVATE_PROXIES", &c.AllowPrivateProxy},
-		{"NETVEX_RETRY_PERMANENT_FAILURES", &c.RetryPermanent},
-		{"NETVEX_SKIP_CONNECT_RETRY", &c.SkipConnectRetry},
-		{"NETVEX_TLS_CLASSICAL_KEX", &c.TLSClassicalKEX},
-		{"NETVEX_PRESCREEN", &c.Prescreen},
-		{"NETVEX_PROBE_UDP", &c.ProbeUDP},
-		{"NETVEX_STOP_ON_SUCCESS", &c.StopOnSuccess},
-		{"NETVEX_SAVE", &c.Save},
-		{"NETVEX_SAVE_GZIP", &c.SaveGzip},
-		{"NETVEX_TARGET_MATRIX", &c.TargetMatrix},
-	} {
-		if err := envBool(item.name, item.dst); err != nil {
-			return err
-		}
-	}
-	if v := os.Getenv("NETVEX_CONNECT_TIMEOUT"); v != "" {
-		c.ConnectTimeoutRaw = v
-	}
-	if v := os.Getenv("NETVEX_REQUEST_TIMEOUT"); v != "" {
-		c.RequestTimeoutRaw = v
-	}
-	if v := os.Getenv("NETVEX_AUTO_PROBE_TIMEOUT"); v != "" {
-		c.AutoProbeRaw = v
-	}
-	if v := os.Getenv("NETVEX_DATA_DIR"); v != "" {
-		c.DataDir = v
-	}
-	if v := os.Getenv("NETVEX_METADATA_FILE"); v != "" {
-		c.MetadataFile = v
-	}
-	if v := os.Getenv("NETVEX_CA_BUNDLE"); v != "" {
-		c.CABundle = v
-	}
-	if v := os.Getenv("NETVEX_PROXY_CA_BUNDLE"); v != "" {
-		c.ProxyCABundle = v
-	}
-	if v := os.Getenv("NETVEX_EXPECTED_BODY_SHA256"); v != "" {
-		c.ExpectedBodySHA = strings.ToLower(strings.TrimSpace(v))
-	}
-	if v := os.Getenv("NETVEX_PREFLIGHT"); v != "" {
-		c.Preflight = strings.ToLower(strings.TrimSpace(v))
-	}
-	if v := os.Getenv("NETVEX_TARGETS"); v != "" {
-		c.Targets = envList(v)
-	}
-	if v := os.Getenv("NETVEX_ALLOWED_TARGET_HOSTS"); v != "" {
-		c.AllowedHosts = envList(v)
-	}
-	if v := os.Getenv("NETVEX_REQUIRE_TEXT"); v != "" {
-		c.RequireText = envList(v)
-	}
-	if v := os.Getenv("NETVEX_REJECT_TEXT"); v != "" {
-		c.RejectText = envList(v)
-	}
-	if v := os.Getenv("NETVEX_EXPECT_JSON"); v != "" {
-		c.ExpectJSON = envList(v)
-	}
-	if v := os.Getenv("NETVEX_ANONYMITY_BASELINE_IP"); v != "" {
-		c.AnonymityBaseline = strings.TrimSpace(v)
-	}
-	if v := os.Getenv("NETVEX_DNS_CACHE_TTL"); v != "" {
-		c.DNSCacheTTLRaw = v
-	}
-	if v := os.Getenv("NETVEX_PROXY_DNS_CACHE_TTL"); v != "" {
-		c.ProxyDNSCacheRaw = v
-	}
-	if v := os.Getenv("NETVEX_CANARY_INTERVAL"); v != "" {
-		c.CanaryRaw = v
-	}
-	if v := os.Getenv("NETVEX_EXPECT_COUNTRY"); v != "" {
-		c.ExpectCountries = envList(v)
-	}
-	if v := os.Getenv("NETVEX_PRESCREEN_TIMEOUT"); v != "" {
-		c.PrescreenRaw = v
-	}
-	if v := os.Getenv("NETVEX_RETRY_BACKOFF"); v != "" {
-		c.RetryBackoffRaw = v
-	}
-	if v := os.Getenv("NETVEX_ROTATION_INTERVAL"); v != "" {
-		c.RotationRaw = v
-	}
-	if v := os.Getenv("NETVEX_PROGRESS_INTERVAL"); v != "" {
-		c.ProgressRaw = v
+		*binding.target = parsed
 	}
 	return nil
 }
 
-func envInt(name string, dst *int) error {
-	v := os.Getenv(name)
-	if v == "" {
-		return nil
-	}
-	n, err := strconv.Atoi(v)
-	if err != nil {
-		return fmt.Errorf("invalid %s: %w", name, err)
-	}
-	*dst = n
-	return nil
+func parseInt64(value string) (int64, error)   { return strconv.ParseInt(value, 10, 64) }
+func parseFloat(value string) (float64, error) { return strconv.ParseFloat(value, 64) }
+func parseText(value string) (string, error)   { return strings.TrimSpace(value), nil }
+func parseLowerText(value string) (string, error) {
+	return strings.ToLower(strings.TrimSpace(value)), nil
 }
 
-func envInt64(name string, dst *int64) error {
-	v := os.Getenv(name)
-	if v == "" {
-		return nil
-	}
-	n, err := strconv.ParseInt(v, 10, 64)
-	if err != nil {
-		return fmt.Errorf("invalid %s: %w", name, err)
-	}
-	*dst = n
-	return nil
-}
-
-func envFloat(name string, dst *float64) error {
-	v := os.Getenv(name)
-	if v == "" {
-		return nil
-	}
-	n, err := strconv.ParseFloat(v, 64)
-	if err != nil {
-		return fmt.Errorf("invalid %s: %w", name, err)
-	}
-	*dst = n
-	return nil
-}
-
-func envBool(name string, dst *bool) error {
-	v := os.Getenv(name)
-	if v == "" {
-		return nil
-	}
-	b, err := strconv.ParseBool(v)
-	if err != nil {
-		return fmt.Errorf("invalid %s: %w", name, err)
-	}
-	*dst = b
-	return nil
-}
-
-func envList(value string) []string {
+func parseList(value string) ([]string, error) {
 	parts := strings.Split(value, ",")
 	result := make([]string, 0, len(parts))
 	for _, part := range parts {
@@ -380,7 +294,7 @@ func envList(value string) []string {
 			result = append(result, part)
 		}
 	}
-	return result
+	return result, nil
 }
 
 func (c *Config) ParseDurations() error {
@@ -573,6 +487,14 @@ func (c Config) validateAssertions() error {
 		}
 		if _, err := hex.DecodeString(c.ExpectedBodySHA); err != nil {
 			return errors.New("expected_body_sha256 must contain 64 hexadecimal characters")
+		}
+	}
+	if len(c.PinSHA256) > 16 {
+		return errors.New("at most 16 certificate pins are allowed")
+	}
+	for _, pin := range c.PinSHA256 {
+		if _, err := hex.DecodeString(pin); err != nil || len(pin) != 64 {
+			return errors.New("certificate pins must contain 64 hexadecimal characters")
 		}
 	}
 	if len(c.RequireText) > 16 || len(c.RejectText) > 16 || len(c.ExpectJSON) > 16 {

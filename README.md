@@ -378,10 +378,10 @@ Environment configuration covers every persistent engine setting:
 | Concurrency | `NETVEX_CONCURRENCY`, `NETVEX_QUEUE_SIZE`, `NETVEX_PER_TARGET_CONCURRENCY`, `NETVEX_REQUESTS_PER_SECOND` |
 | Measurements | `NETVEX_REPEAT`, `NETVEX_MIN_SUCCESS_RATE`, `NETVEX_STOP_ON_SUCCESS`, `NETVEX_RETRY_PERMANENT_FAILURES`, `NETVEX_ROTATION_SAMPLES`, `NETVEX_ROTATION_INTERVAL` |
 | Time | `NETVEX_CONNECT_TIMEOUT`, `NETVEX_REQUEST_TIMEOUT`, `NETVEX_AUTO_PROBE_TIMEOUT`, `NETVEX_DNS_CACHE_TTL`, `NETVEX_PROXY_DNS_CACHE_TTL`, `NETVEX_RETRY_BACKOFF`, `NETVEX_PROGRESS_INTERVAL` |
-| Destinations | `NETVEX_TARGETS`, `NETVEX_ALLOWED_TARGET_HOSTS`, `NETVEX_MAX_REDIRECTS`, `NETVEX_ALLOW_PRIVATE_TARGETS`, `NETVEX_ALLOW_PRIVATE_PROXIES`, `NETVEX_ALLOW_REMOTE_DNS`, `NETVEX_TARGET_MATRIX`, `NETVEX_TARGET_QUORUM`, `NETVEX_PREFLIGHT`, `NETVEX_CANARY_INTERVAL` |
+| Destinations | `NETVEX_TARGETS`, `NETVEX_ALLOWED_TARGET_HOSTS`, `NETVEX_MAX_REDIRECTS`, `NETVEX_ALLOW_PRIVATE_TARGETS`, `NETVEX_ALLOW_PRIVATE_PROXIES`, `NETVEX_ALLOW_REDIRECT_DOWNGRADE`, `NETVEX_ALLOW_REMOTE_DNS`, `NETVEX_TARGET_MATRIX`, `NETVEX_TARGET_QUORUM`, `NETVEX_PREFLIGHT`, `NETVEX_CANARY_INTERVAL` |
 | Speed | `NETVEX_PRESCREEN`, `NETVEX_PRESCREEN_CONCURRENCY`, `NETVEX_PRESCREEN_RETRIES`, `NETVEX_PRESCREEN_TIMEOUT`, `NETVEX_SKIP_CONNECT_RETRY`, `NETVEX_TLS_CLASSICAL_KEX` |
 | Response qualification | `NETVEX_MIN_RESPONSE_BYTES`, `NETVEX_MIN_THROUGHPUT_KBPS`, `NETVEX_REQUIRE_TEXT`, `NETVEX_REJECT_TEXT`, `NETVEX_EXPECT_JSON`, `NETVEX_EXPECTED_BODY_SHA256`, `NETVEX_ANONYMITY_BASELINE_IP`, `NETVEX_EXPECT_COUNTRY`, `NETVEX_PROBE_UDP` |
-| TLS trust | `NETVEX_CA_BUNDLE`, `NETVEX_PROXY_CA_BUNDLE` |
+| TLS trust | `NETVEX_CA_BUNDLE`, `NETVEX_PROXY_CA_BUNDLE`, `NETVEX_PIN_SHA256` |
 | Resource limits | `NETVEX_MAX_INPUT_BYTES`, `NETVEX_MAX_INPUT_ENTRIES`, `NETVEX_MAX_RESPONSE_BYTES`, `NETVEX_INTELLIGENCE_BODY_BYTES` |
 | Persistence and metadata | `NETVEX_DATA_DIR`, `NETVEX_SAVE`, `NETVEX_SAVE_GZIP`, `NETVEX_METADATA_FILE` |
 
@@ -393,7 +393,8 @@ disabled explicitly, for example with `--allow-remote-dns=false`.
 Target hostnames form an exact allowlist. Additional redirect hostnames require
 `--allow-host`. Private, loopback, link-local, carrier-grade NAT, cloud metadata,
 documentation, multicast, unspecified, and reserved destinations remain blocked
-unless the deliberate `--allow-private-targets` exception is used. Proxy gateways
+unless the deliberate `--allow-private-targets` exception is used. Redirects from
+HTTPS to plain HTTP are refused unless `--allow-redirect-downgrade` is set. Proxy gateways
 on those addresses are blocked the same way, checked at connect time so hostnames
 cannot resolve around it. Use `--allow-private-proxies` for your own local proxies
 such as `127.0.0.1:9050`.
@@ -456,6 +457,11 @@ still count everything. `--save-gzip` compresses saved runs, which matters on la
 lists because each result takes about 950 bytes; every command reads both formats. `netvex diff [BASE [CURRENT]]` compares two saved runs,
 by default the two newest, and reports proxies that died, revived, appeared,
 disappeared, or changed median latency beyond `--latency-change` percent.
+
+`--pin-sha256 HEX` accepts only the listed destination certificates, which detects
+TLS interception by a CA this host trusts. It applies to every HTTPS hop, so include
+redirect targets and rotated certificates. `netvex inspect` shows the value under
+`peer_certificate_sha256`.
 
 `--probe-udp` asks working SOCKS5 proxies for UDP ASSOCIATE. It exercises the
 control channel only, so `supported` does not prove datagrams were relayed.

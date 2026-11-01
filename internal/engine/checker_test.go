@@ -1550,3 +1550,80 @@ func TestJSONPathSupportsArrayIndexes(t *testing.T) {
 		}
 	}
 }
+
+func TestCertificatePinDetectsInterception(t *testing.T) {
+	certificate, pool := testCertificate(t)
+	run := func(pins ...string) model.Result {
+		c := baseChecker("https://target.test/")
+		c.Config.Repeat = 1
+		c.TLSConfig = &tls.Config{RootCAs: pool}
+		if len(pins) > 0 {
+			c.certificatePins = map[string]struct{}{}
+			for _, pin := range pins {
+				c.certificatePins[pin] = struct{}{}
+			}
+		}
+		c.Connector.DialContext = pipeDial(func(conn net.Conn) {
+			reader := bufio.NewReader(conn)
+			_, _ = http.ReadRequest(reader)
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+			server := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{certificate}})
+			if server.Handshake() != nil {
+				return
+			}
+			_, _ = http.ReadRequest(bufio.NewReader(server))
+			_, _ = io.WriteString(server, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+			_ = server.Close()
+		})
+		return c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	}
+	baseline := run()
+	if baseline.Status != model.StatusOK {
+		t.Fatalf("result=%+v", baseline)
+	}
+	fingerprint := baseline.Observations[0].DestinationTLS.PeerCertificateSHA
+	if result := run(strings.Repeat("0", 64), fingerprint); result.Status != model.StatusOK {
+		t.Fatalf("a rotated pin set must accept any listed certificate: %+v", result)
+	}
+	result := run(strings.Repeat("0", 64))
+	observation := result.Observations[0]
+	if result.Status != model.StatusFailed || observation.Code != "certificate_pin_mismatch" || observation.Stage != model.StageTLS || observation.DestinationTLS == nil {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestHTTPSRedirectToHTTPIsRefused(t *testing.T) {
+	certificate, pool := testCertificate(t)
+	run := func(allow bool) model.Result {
+		c := baseChecker("https://target.test/")
+		c.Config.Repeat = 1
+		c.Config.AllowDowngrade = allow
+		c.TLSConfig = &tls.Config{RootCAs: pool}
+		var step atomic.Int64
+		c.Connector.DialContext = pipeDial(func(conn net.Conn) {
+			reader := bufio.NewReader(conn)
+			_, _ = http.ReadRequest(reader)
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+			if step.Add(1) == 1 {
+				server := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{certificate}})
+				if server.Handshake() != nil {
+					return
+				}
+				_, _ = http.ReadRequest(bufio.NewReader(server))
+				_, _ = io.WriteString(server, "HTTP/1.1 302 Found\r\nLocation: http://target.test/plain\r\nContent-Length: 0\r\n\r\n")
+				_ = server.Close()
+				return
+			}
+			_, _ = http.ReadRequest(reader)
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+		})
+		return c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	}
+	refused := run(false)
+	if refused.Status != model.StatusPolicyBlock || refused.Observations[0].Code != "redirect_downgrade" {
+		t.Fatalf("result=%+v", refused)
+	}
+	if allowed := run(true); allowed.Status != model.StatusOK {
+		t.Fatalf("explicit exception ignored: %+v", allowed)
+	}
+}

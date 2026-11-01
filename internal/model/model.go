@@ -363,6 +363,8 @@ type RunConfiguration struct {
 	SkipConnectRetry  bool     `json:"skip_connect_retry,omitempty"`
 	TLSClassicalKEX   bool     `json:"tls_classical_kex,omitempty"`
 	ProbeUDP          bool     `json:"probe_udp,omitempty"`
+	CertificatePins   int      `json:"certificate_pins,omitempty"`
+	AllowDowngrade    bool     `json:"allow_redirect_downgrade,omitempty"`
 	ExpectCountries   []string `json:"expect_countries,omitempty"`
 	CanaryInterval    string   `json:"canary_interval,omitempty"`
 	SaveStatus        string   `json:"save_status,omitempty"`

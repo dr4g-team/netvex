@@ -28,6 +28,7 @@ func checkpointFingerprint(cfg config.Config, protocol model.Protocol) string {
 		ExpectJSON              []string
 		ExpectedBodySHA         string
 		ExpectCountries         []string
+		PinSHA256               []string
 		Repeat, RotationSamples int
 		TargetQuorum            int
 		MinSuccessRate          float64
@@ -35,7 +36,7 @@ func checkpointFingerprint(cfg config.Config, protocol model.Protocol) string {
 		MinThroughputKBPS       float64
 		TargetMatrix            bool
 		AllowRemoteDNS          bool
-	}{protocol, cfg.Targets, cfg.TargetRules, cfg.RequireText, cfg.RejectText, cfg.ExpectJSON, cfg.ExpectedBodySHA, cfg.ExpectCountries, cfg.Repeat, cfg.RotationSamples, cfg.TargetQuorum, cfg.MinSuccessRate, cfg.MinResponseBytes, cfg.MinThroughputKBPS, cfg.TargetMatrix, cfg.AllowRemoteDNS})
+	}{protocol, cfg.Targets, cfg.TargetRules, cfg.RequireText, cfg.RejectText, cfg.ExpectJSON, cfg.ExpectedBodySHA, cfg.ExpectCountries, cfg.PinSHA256, cfg.Repeat, cfg.RotationSamples, cfg.TargetQuorum, cfg.MinSuccessRate, cfg.MinResponseBytes, cfg.MinThroughputKBPS, cfg.TargetMatrix, cfg.AllowRemoteDNS})
 	if err != nil {
 		panic(err)
 	}

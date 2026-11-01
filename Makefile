@@ -7,7 +7,7 @@ MODULE := github.com/drag-team/netvex
 GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.9.0
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 FUZZTIME ?= 30s
-COVERAGE_MIN ?= 70
+COVERAGE_MIN ?= 75
 LDFLAGS := -s -w -X $(MODULE)/internal/buildinfo.Version=$(VERSION) -X $(MODULE)/internal/buildinfo.Commit=$(COMMIT) -X $(MODULE)/internal/buildinfo.Date=$(BUILD_DATE)
 
 .PHONY: all build check clean cover cross-check fmt fmt-check fuzz install lint race release-check reproducibility-check test uninstall verify version vet vuln

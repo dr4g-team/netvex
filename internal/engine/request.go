@@ -48,6 +48,13 @@ func (c *Checker) requestWithRedirects(ctx context.Context, p model.Proxy, dest 
 		obs.Timings.TLSMS = ms(time.Since(tlsStart))
 		obs.DestinationTLS = model.TLSInfoFromState(tc.ConnectionState())
 		conn = tc
+		// A pin catches interception by a CA the host trusts, which chain validation
+		// accepts by design. It applies to every HTTPS hop, redirects included.
+		if c.certificatePins != nil {
+			if _, pinned := c.certificatePins[obs.DestinationTLS.PeerCertificateSHA]; !pinned {
+				return obs, &protocol.Error{Stage: model.StageTLS, Status: model.StatusFailed, Code: "certificate_pin_mismatch", Detail: "destination certificate does not match a configured pin; the connection may be intercepted"}
+			}
+		}
 	}
 	reqURL := *dest.URL
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL.String(), nil)
@@ -94,6 +101,11 @@ func (c *Checker) requestWithRedirects(ctx context.Context, p model.Proxy, dest 
 		loc, locErr := dest.URL.Parse(location)
 		if locErr != nil {
 			return obs, &protocol.Error{Stage: model.StageResponse, Status: model.StatusFailed, Code: "invalid_redirect", Detail: "destination returned an invalid redirect"}
+		}
+		// Following https to http would validate the proxy over plaintext that it, or
+		// anyone on its path, could rewrite, after the operator asked for TLS.
+		if dest.URL.Scheme == "https" && loc.Scheme == "http" && !c.Config.AllowDowngrade {
+			return obs, &protocol.Error{Stage: model.StagePolicy, Status: model.StatusPolicyBlock, Code: "redirect_downgrade", Detail: "destination redirected from HTTPS to HTTP"}
 		}
 		_ = resp.Body.Close()
 		_ = timed.Conn.Close()

@@ -306,3 +306,41 @@ func TestValidateRejectsEachUnsafeSetting(t *testing.T) {
 		})
 	}
 }
+
+func TestCertificatePinBounds(t *testing.T) {
+	c := Defaults()
+	if err := c.ParseDurations(); err != nil {
+		t.Fatal(err)
+	}
+	c.PinSHA256 = []string{"abc"}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "certificate pins") {
+		t.Fatalf("err=%v", err)
+	}
+	c.PinSHA256 = []string{strings.Repeat("z", 64)}
+	if err := c.Validate(); err == nil {
+		t.Fatal("non-hexadecimal pin accepted")
+	}
+	c.PinSHA256 = make([]string, 17)
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "at most 16") {
+		t.Fatalf("err=%v", err)
+	}
+	c.PinSHA256 = []string{strings.Repeat("a", 64)}
+	if err := c.Validate(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEnvironmentReportsEveryInvalidValue(t *testing.T) {
+	t.Setenv("NETVEX_REPEAT", "many")
+	t.Setenv("NETVEX_STOP_ON_SUCCESS", "perhaps")
+	t.Setenv("NETVEX_PIN_SHA256", " a , b ,, ")
+	t.Setenv("NETVEX_PREFLIGHT", " REPORT ")
+	c := Defaults()
+	err := applyEnv(&c)
+	if err == nil || !strings.Contains(err.Error(), "NETVEX_REPEAT") || !strings.Contains(err.Error(), "NETVEX_STOP_ON_SUCCESS") {
+		t.Fatalf("err=%v", err)
+	}
+	if len(c.PinSHA256) != 2 || c.PinSHA256[1] != "b" || c.Preflight != "report" {
+		t.Fatalf("pins=%v preflight=%q", c.PinSHA256, c.Preflight)
+	}
+}

@@ -36,6 +36,9 @@
         "allow_private_proxies": {
           "type": "boolean"
         },
+        "allow_redirect_downgrade": {
+          "type": "boolean"
+        },
         "allow_remote_dns": {
           "type": "boolean"
         },
@@ -47,6 +50,9 @@
         },
         "canary_interval": {
           "type": "string"
+        },
+        "certificate_pins": {
+          "type": "integer"
         },
         "concurrency": {
           "type": "integer"

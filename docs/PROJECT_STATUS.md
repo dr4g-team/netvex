@@ -53,13 +53,13 @@ It is not represented as a completed independent security audit.
 ## Verification record
 
 - `make verify`: passed (`go vet`, all tests, race detector, staticcheck,
-  govulncheck, and the 70% coverage floor).
+  govulncheck, and the 75% coverage floor).
 - Proxy parser fuzzing: 329,878 executions in 10 seconds with no failure.
 - Structured CSV/JSON/JSONL/auto fuzzing: 178,374 executions in 10 seconds
   with no failure.
 - HTTP response fuzzing: 222,363 executions in 10 seconds covering valid,
   truncated, malformed, and oversized inputs with no failure.
-- Total coverage 73.5%, enforced in CI.
+- Coverage floor of 75% enforced in CI.
 - Controlled 500,000-item scheduler: 910,336 items/s median at concurrency 128
   across three runs on the non-isolated delivery host.
 - Offline IPv4 metadata lookup: 411 ns/op median, zero allocations across three
