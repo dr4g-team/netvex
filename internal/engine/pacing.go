@@ -131,6 +131,8 @@ func (c *Checker) acquireTarget(ctx context.Context, host string) func() {
 	}
 }
 
-// rateCatchUp is how far the schedule may lag before unused capacity is
-// forfeited. It absorbs timer overshoot without allowing a meaningful burst.
-const rateCatchUp = 5 * time.Millisecond
+// rateCatchUp is how far the schedule may lag before unused capacity is forfeited.
+// It must exceed timer overshoot, which reaches about 15 ms on Windows; a smaller
+// window loses capacity there. Longer idle gaps earn no credit, so the largest
+// possible burst is this window's worth of attempts.
+const rateCatchUp = 20 * time.Millisecond
