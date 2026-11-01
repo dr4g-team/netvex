@@ -66,7 +66,8 @@ func TestResultIDSeparatesAccountsOnOneGateway(t *testing.T) {
 	if first.ResultID(key) == second.ResultID(key) {
 		t.Fatal("two accounts on one gateway share a result ID")
 	}
-	if first.ResultID(key) != first.ResultID(key) {
+	repeated := first
+	if first.ResultID(key) != repeated.ResultID(key) {
 		t.Fatal("result ID is not stable")
 	}
 	if base.ResultID(key) != base.Key() {
