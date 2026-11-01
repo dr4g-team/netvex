@@ -19,6 +19,11 @@ All notable changes to NetVex are documented in this file. The project uses
 - `--expect-json` paths accept array indexes, as in `items.0.id=7`.
 - `doctor` reports effective prescreen workers.
 - `--output-status` accepts a comma-separated list.
+
+### Fixed
+
+- `--rate` lost capacity on Windows, where timer overshoot exceeded the catch-up
+  window: 5,000/s delivered 3,439/s.
 - Commit history on `main` after `427e7fe` was rewritten to remove co-author
   trailers, so tag `v0.7.0` is not an ancestor of `main`. Its tree is identical to
   the commit `4313964` on `main`.
