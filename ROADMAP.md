@@ -16,7 +16,8 @@ it is not a promise that every item will ship unchanged.
 
 - Opt-in, locally cached reputation evidence with explicit disclosure controls.
 - A transactional SQLite history backend for larger local datasets.
-- Additional authenticated proxy mechanisms backed by controlled fixtures.
+- NTLM and Negotiate proxy authentication, and Digest in forward mode, backed by
+  controlled fixtures.
 
 ## Explicitly out of scope
 

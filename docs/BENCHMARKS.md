@@ -289,3 +289,21 @@ real local run reached 4,051/s.
 
 The controlled 500,000-item scheduler measured 909,052 items/s median (range
 894,294-983,639 items/s), level with the previous baseline.
+
+### Saved runs
+
+Measured on 2026-11-01 on the same host with 100,000 distinct refused endpoints at
+concurrency 512, so compression sees realistic variety rather than repeated lines:
+
+| Mode | Bytes per result | Wall time | Max RSS |
+|---|---:|---:|---:|
+| `--save` | 1,003 | 3.29 s | 40 MiB |
+| `--save --save-gzip` | 57 | 3.26 s | 41 MiB |
+
+Failed results are the most repetitive, so successful results with full evidence
+will compress less. Reusing one buffer moved `BenchmarkRunWriter` from 1,600 B/op and
+3 allocations to 832 B/op and 2 allocations, across three samples each.
+
+```sh
+go test -run '^$' -bench '^BenchmarkRunWriter$' -benchmem -count=3 ./internal/store
+```

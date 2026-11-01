@@ -89,8 +89,9 @@ reproducible without consulting the original command line.
 run; `0s` means every hostname dial used the system resolver normally.
 `keep_partial` records the explicit interruption-output policy when enabled.
 `prescreen`, `skip_connect_retry`, `tls_classical_kex`, `probe_udp`,
-`expect_countries`, `canary_interval`, and `save_status` record the corresponding
-options. With `save_status`, the summary counts every proxy while the saved run
+`expect_countries`, `canary_interval`, `save_status`, `save_gzip`,
+`certificate_pins`, and `allow_redirect_downgrade` record the corresponding options.
+`proxy_authentication` may now be `digest`. With `save_status`, the summary counts every proxy while the saved run
 holds only the selected statuses.
 
 When a quality policy is active, `quality` contains a boolean result and the
