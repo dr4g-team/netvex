@@ -31,26 +31,27 @@ import (
 )
 
 type Checker struct {
-	Config          config.Config
-	Policy          *policy.Policy
-	Connector       protocol.Connector
-	mu              sync.Mutex
-	targetSem       map[string]chan struct{}
-	TLSConfig       *tls.Config
-	rateMu          sync.Mutex
-	nextStart       time.Time
-	resolveMu       sync.Mutex
-	resolved        map[string]*resolveEntry
-	baseline        netip.Addr
-	Metadata        MetadataLookup
-	requireText     []string
-	rejectText      []string
-	expectJSON      []jsonExpectation
-	Label           string
-	targetRules     map[string]compiledResponseRules
-	effectiveRules  map[string]compiledResponseRules
-	targetNames     map[string]string
-	expectedTargets []string
+	Config            config.Config
+	Policy            *policy.Policy
+	Connector         protocol.Connector
+	mu                sync.Mutex
+	targetSem         map[string]chan struct{}
+	TLSConfig         *tls.Config
+	rateMu            sync.Mutex
+	nextStart         time.Time
+	resolveMu         sync.Mutex
+	resolved          map[string]*resolveEntry
+	baseline          netip.Addr
+	Metadata          MetadataLookup
+	requireText       []string
+	rejectText        []string
+	expectJSON        []jsonExpectation
+	Label             string
+	targetRules       map[string]compiledResponseRules
+	effectiveRules    map[string]compiledResponseRules
+	targetNames       map[string]string
+	expectedTargets   []string
+	IncludeInputProxy bool
 }
 
 type jsonExpectation struct {
@@ -108,13 +109,50 @@ func readBodyEvidence(reader io.Reader, maxBytes, captureBytes, expectedBytes in
 	}
 	digest := sha256.New()
 	buffer := responseReadBuffers.Get().(*[]byte)
-	writers := []io.Writer{digest, &capture}
-	if evidence != nil {
-		writers = append(writers, evidence)
+	limit := maxBytes + 1
+	var total int64
+	var readErr error
+	emptyReads := 0
+	for total < limit {
+		chunk := *buffer
+		if remaining := limit - total; int64(len(chunk)) > remaining {
+			chunk = chunk[:remaining]
+		}
+		n, err := reader.Read(chunk)
+		if n > 0 {
+			emptyReads = 0
+			value := chunk[:n]
+			_, _ = digest.Write(value)
+			_, _ = capture.Write(value)
+			total += int64(n)
+			if evidence != nil {
+				written, evidenceErr := evidence.Write(value)
+				if evidenceErr != nil {
+					readErr = evidenceErr
+					break
+				}
+				if written != len(value) {
+					readErr = io.ErrShortWrite
+					break
+				}
+			}
+		} else if err == nil {
+			emptyReads++
+			if emptyReads >= 100 {
+				readErr = io.ErrNoProgress
+				break
+			}
+		}
+		if err != nil {
+			if !errors.Is(err, io.EOF) {
+				readErr = err
+			}
+			break
+		}
 	}
-	n, err := io.CopyBuffer(io.MultiWriter(writers...), io.LimitReader(reader, maxBytes+1), *buffer)
 	responseReadBuffers.Put(buffer)
-	return capture.buffer.Bytes(), n, hex.EncodeToString(digest.Sum(nil)), err
+	var sum [sha256.Size]byte
+	return capture.buffer.Bytes(), total, hex.EncodeToString(digest.Sum(sum[:0])), readErr
 }
 
 type textMatchPlan struct {
@@ -128,10 +166,11 @@ type textPattern struct {
 }
 
 type textMatcher struct {
-	plan    *textMatchPlan
-	found   []bool
-	tail    []byte
-	scratch []byte
+	plan      *textMatchPlan
+	found     []bool
+	remaining int
+	tail      []byte
+	boundary  []byte
 }
 
 func compileTextMatchPlan(required, rejected []string) *textMatchPlan {
@@ -140,6 +179,9 @@ func compileTextMatchPlan(required, rejected []string) *textMatchPlan {
 		return nil
 	}
 	for _, pattern := range patterns {
+		if pattern == "" {
+			return nil
+		}
 		for index := range len(pattern) {
 			if pattern[index] >= 0x80 {
 				return nil
@@ -161,25 +203,43 @@ func (p *textMatchPlan) matcher() *textMatcher {
 	if p == nil {
 		return nil
 	}
-	return &textMatcher{plan: p, found: make([]bool, len(p.patterns)), tail: make([]byte, 0, p.maxLength-1)}
+	return &textMatcher{plan: p, found: make([]bool, len(p.patterns)), remaining: len(p.patterns), tail: make([]byte, 0, p.maxLength-1)}
 }
 
 func (m *textMatcher) Write(value []byte) (int, error) {
-	length := len(m.tail) + len(value)
-	if cap(m.scratch) < length {
-		m.scratch = make([]byte, length)
-	} else {
-		m.scratch = m.scratch[:length]
+	if len(value) == 0 || m.remaining == 0 {
+		return len(value), nil
 	}
-	copy(m.scratch, m.tail)
-	copy(m.scratch[len(m.tail):], value)
+	tailLength := m.plan.maxLength - 1
+	boundaryLength := 0
+	if len(m.tail) > 0 && tailLength > 0 {
+		boundaryLength = len(m.tail) + min(len(value), tailLength)
+		if cap(m.boundary) < boundaryLength {
+			m.boundary = make([]byte, boundaryLength)
+		} else {
+			m.boundary = m.boundary[:boundaryLength]
+		}
+		copy(m.boundary, m.tail)
+		copy(m.boundary[len(m.tail):], value[:boundaryLength-len(m.tail)])
+	}
 	for index, pattern := range m.plan.patterns {
-		if !m.found[index] && containsASCIIFold(m.scratch, pattern) {
+		if !m.found[index] && (containsASCIIFold(value, pattern) || boundaryLength > 0 && containsASCIIFold(m.boundary, pattern)) {
 			m.found[index] = true
+			m.remaining--
 		}
 	}
-	tailLength := min(m.plan.maxLength-1, len(m.scratch))
-	m.tail = append(m.tail[:0], m.scratch[len(m.scratch)-tailLength:]...)
+	if m.remaining == 0 || tailLength == 0 {
+		m.tail = m.tail[:0]
+		return len(value), nil
+	}
+	if len(value) >= tailLength {
+		m.tail = append(m.tail[:0], value[len(value)-tailLength:]...)
+	} else if boundaryLength == 0 {
+		m.tail = append(m.tail[:0], value...)
+	} else {
+		keep := min(tailLength, boundaryLength)
+		m.tail = append(m.tail[:0], m.boundary[boundaryLength-keep:]...)
+	}
 	return len(value), nil
 }
 
@@ -244,7 +304,12 @@ type resolveEntry struct {
 
 func NewChecker(c config.Config) *Checker {
 	baseline, _ := netip.ParseAddr(c.AnonymityBaseline)
-	checker := &Checker{Config: c, Policy: policy.New(c.AllowPrivate, c.AllowedHosts), Connector: protocol.Connector{ConnectTimeout: c.ConnectTimeout, AllowRemoteDNS: c.AllowRemoteDNS}, targetSem: make(map[string]chan struct{}), resolved: make(map[string]*resolveEntry), baseline: baseline.Unmap(), targetRules: make(map[string]compiledResponseRules), effectiveRules: make(map[string]compiledResponseRules, len(c.Targets)), targetNames: make(map[string]string, len(c.Targets)), expectedTargets: make([]string, 0, len(c.Targets))}
+	dialer := &net.Dialer{KeepAlive: -1}
+	connector := protocol.Connector{ConnectTimeout: c.ConnectTimeout, AllowRemoteDNS: c.AllowRemoteDNS, Dialer: dialer}
+	if c.ProxyDNSCacheTTL > 0 {
+		connector.ProxyDNS = protocol.NewProxyDNSCache(c.ProxyDNSCacheTTL, min(c.MaxInputEntries, 4096))
+	}
+	checker := &Checker{Config: c, Policy: policy.New(c.AllowPrivate, c.AllowedHosts), Connector: connector, targetSem: make(map[string]chan struct{}), resolved: make(map[string]*resolveEntry), baseline: baseline.Unmap(), targetRules: make(map[string]compiledResponseRules), effectiveRules: make(map[string]compiledResponseRules, len(c.Targets)), targetNames: make(map[string]string, len(c.Targets)), expectedTargets: make([]string, 0, len(c.Targets))}
 	for _, rule := range c.RequireText {
 		checker.requireText = append(checker.requireText, strings.ToLower(rule))
 	}
@@ -347,7 +412,7 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		}
 		required *= quorum
 	}
-	r := model.Result{SchemaVersion: model.SchemaVersion, ID: p.Key(), Proxy: p.SafeURI(), Endpoint: p.Address(), Protocol: p.Protocol, Label: c.Label, RequiredSuccesses: required, TargetQuorum: quorum, CheckedAt: time.Now().UTC(), InputProxy: p.FullURI()}
+	r := model.Result{SchemaVersion: model.SchemaVersion, ID: p.Key(), Proxy: p.SafeURI(), Endpoint: p.Address(), Protocol: p.Protocol, Label: c.Label, RequiredSuccesses: required, TargetQuorum: quorum, CheckedAt: time.Now().UTC()}
 	for i := 0; i < attemptCount; i++ {
 		target := c.Config.Targets[i%len(c.Config.Targets)]
 		intervalDue := i > 0 && (!c.Config.TargetMatrix || i%len(c.Config.Targets) == 0)
@@ -418,9 +483,11 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 			r.Status = model.StatusInterrupted
 		}
 	}
-	if r.Status == model.StatusOK && p.Protocol == model.ProtocolAuto {
+	if r.Status == model.StatusOK && c.IncludeInputProxy {
 		exportProxy := p
-		exportProxy.Protocol = r.Protocol
+		if p.Protocol == model.ProtocolAuto {
+			exportProxy.Protocol = r.Protocol
+		}
 		r.InputProxy = exportProxy.FullURI()
 	}
 	r.Score = score.Calculate(r.Observations)

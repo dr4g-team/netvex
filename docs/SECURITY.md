@@ -13,6 +13,8 @@ Default safeguards:
   documentation, multicast, and unspecified address ranges denied;
 - numeric IP pinned in HTTP CONNECT, SOCKS4, and SOCKS5 destination requests;
 - concurrent DNS lookup collapse and bounded caching of fully checked answers;
+- optional proxy-gateway DNS coalescing with bounded host/address cardinality,
+  round-robin selection, no negative caching, and the original TLS hostname;
 - redirect destinations are revalidated without entering the DNS cache;
 - redirects independently allowlisted and resolved;
 - TLS 1.2 minimum and normal system certificate validation, never an insecure
@@ -31,6 +33,8 @@ Default safeguards:
 - CI and release actions are pinned to audited immutable revisions, and source
   checkout does not persist repository credentials;
 - proxy usernames and passwords redacted from ordinary output and omitted from history;
+- credential-bearing result strings are not constructed or retained unless the
+  operator explicitly requests `--working-output`;
 - redacted `***` passwords rejected when diagnostic output is re-imported;
 - target paths, fragments, and queries removed from persisted observations unless
   replaced by an explicit control-character-free scenario target name;
@@ -48,6 +52,12 @@ services through supplied proxies. Remote-DNS mode lets a proxy independently
 resolve HTTP CONNECT, forward HTTP, SOCKS4a, and SOCKS5 destinations, so split DNS or
 DNS rebinding can defeat IP pinning. These options should not be used with
 untrusted datasets or targets.
+
+The proxy DNS cache does not apply destination SSRF rules to proxy endpoints:
+those endpoints are the explicitly authorized input being tested and may
+legitimately be private in controlled deployments. Enabling the cache can keep
+using an address until its configured TTL expires; disable it for providers
+whose gateway DNS changes are intentionally faster than that interval.
 
 Credentials present in process arguments may be visible in shell history and the
 process list. Prefer a mode-0600 input file or protected standard input. Both

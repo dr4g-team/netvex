@@ -64,6 +64,8 @@ type Config struct {
 	RetryBackoffRaw   string                   `json:"retry_backoff"`
 	DNSCacheTTL       time.Duration            `json:"-"`
 	DNSCacheTTLRaw    string                   `json:"dns_cache_ttl"`
+	ProxyDNSCacheTTL  time.Duration            `json:"-"`
+	ProxyDNSCacheRaw  string                   `json:"proxy_dns_cache_ttl"`
 	AllowedHosts      []string                 `json:"allowed_target_hosts"`
 	DataDir           string                   `json:"data_dir"`
 	Save              bool                     `json:"save"`
@@ -116,7 +118,8 @@ func Defaults() Config {
 		MaxInputBytes: 256 << 20, MaxInputEntries: 1_000_000, MaxResponseBytes: 1 << 20, IntelligenceBytes: 64 << 10,
 		AllowedHosts: []string{"example.com"},
 		DNSCacheTTL:  5 * time.Minute, DNSCacheTTLRaw: "5m",
-		RetryBackoff: 100 * time.Millisecond, RetryBackoffRaw: "100ms",
+		ProxyDNSCacheRaw: "0s",
+		RetryBackoff:     100 * time.Millisecond, RetryBackoffRaw: "100ms",
 		RotationRaw: "0s", Preflight: "off",
 		DataDir: defaultDataDir(), ProgressInterval: 500 * time.Millisecond, ProgressRaw: "500ms",
 	}
@@ -268,6 +271,9 @@ func applyEnv(c *Config) error {
 	if v := os.Getenv("NETVEX_DNS_CACHE_TTL"); v != "" {
 		c.DNSCacheTTLRaw = v
 	}
+	if v := os.Getenv("NETVEX_PROXY_DNS_CACHE_TTL"); v != "" {
+		c.ProxyDNSCacheRaw = v
+	}
 	if v := os.Getenv("NETVEX_RETRY_BACKOFF"); v != "" {
 		c.RetryBackoffRaw = v
 	}
@@ -360,6 +366,9 @@ func (c *Config) ParseDurations() error {
 	if c.DNSCacheTTL, err = time.ParseDuration(c.DNSCacheTTLRaw); err != nil {
 		return fmt.Errorf("invalid dns_cache_ttl: %w", err)
 	}
+	if c.ProxyDNSCacheTTL, err = time.ParseDuration(c.ProxyDNSCacheRaw); err != nil {
+		return fmt.Errorf("invalid proxy_dns_cache_ttl: %w", err)
+	}
 	if c.RetryBackoff, err = time.ParseDuration(c.RetryBackoffRaw); err != nil {
 		return fmt.Errorf("invalid retry_backoff: %w", err)
 	}
@@ -399,6 +408,9 @@ func (c Config) Validate() error {
 	}
 	if c.DNSCacheTTL < 0 || c.DNSCacheTTL > 24*time.Hour {
 		return errors.New("dns_cache_ttl must be between 0 and 24h")
+	}
+	if c.ProxyDNSCacheTTL < 0 || c.ProxyDNSCacheTTL > 24*time.Hour {
+		return errors.New("proxy_dns_cache_ttl must be between 0 and 24h")
 	}
 	if c.RetryBackoff < 0 || c.RetryBackoff > 30*time.Second {
 		return errors.New("retry_backoff must be between 0 and 30s")
@@ -609,6 +621,7 @@ func (c Config) MarshalJSON() ([]byte, error) {
 	a.AutoProbeRaw = c.AutoProbeTimeout.String()
 	a.ProgressRaw = c.ProgressInterval.String()
 	a.DNSCacheTTLRaw = c.DNSCacheTTL.String()
+	a.ProxyDNSCacheRaw = c.ProxyDNSCacheTTL.String()
 	a.RetryBackoffRaw = c.RetryBackoff.String()
 	a.RotationRaw = c.RotationInterval.String()
 	return json.MarshalIndent(a, "", "  ")

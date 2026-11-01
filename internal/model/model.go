@@ -299,6 +299,7 @@ type RunConfiguration struct {
 	StopOnSuccess     bool     `json:"stop_on_success"`
 	RetryPermanent    bool     `json:"retry_permanent_failures"`
 	AllowRemoteDNS    bool     `json:"allow_remote_dns"`
+	ProxyDNSCacheTTL  string   `json:"proxy_dns_cache_ttl,omitempty"`
 	MaxResponseBytes  int64    `json:"max_response_bytes"`
 	IntelligenceBytes int64    `json:"intelligence_body_bytes"`
 	MinResponseBytes  int64    `json:"min_response_bytes,omitempty"`

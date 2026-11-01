@@ -59,6 +59,11 @@ func TestConfigValidation(t *testing.T) {
 		t.Fatal("accepted zero auto probe timeout")
 	}
 	c = Defaults()
+	c.ProxyDNSCacheTTL = 25 * time.Hour
+	if err := c.Validate(); err == nil {
+		t.Fatal("accepted excessive proxy DNS cache TTL")
+	}
+	c = Defaults()
 	c.Concurrency = 1024
 	c.IntelligenceBytes = 1 << 20
 	if err := c.Validate(); err == nil {
@@ -141,6 +146,7 @@ func TestCompleteEnvironmentConfiguration(t *testing.T) {
 		"NETVEX_TARGETS":                  "https://one.test/, http://two.test/",
 		"NETVEX_ALLOWED_TARGET_HOSTS":     "one.test, two.test",
 		"NETVEX_PROGRESS_INTERVAL":        "750ms",
+		"NETVEX_PROXY_DNS_CACHE_TTL":      "45s",
 		"NETVEX_AUTO_PROBE_TIMEOUT":       "1500ms",
 		"NETVEX_ANONYMITY_BASELINE_IP":    "198.51.100.10",
 		"NETVEX_METADATA_FILE":            "/tmp/netvex-metadata.csv",
@@ -166,7 +172,7 @@ func TestCompleteEnvironmentConfiguration(t *testing.T) {
 	if c.Concurrency != 9 || c.QueueSize != 18 || c.PerTarget != 3 || c.RateLimit != 12.5 || c.Repeat != 4 || c.MinSuccessRate != 0.75 {
 		t.Fatalf("numeric environment not applied: %+v", c)
 	}
-	if c.MaxRedirects != 1 || c.MaxInputBytes != 4096 || c.MaxInputEntries != 1234 || c.MaxResponseBytes != 2048 || c.IntelligenceBytes != 1536 || c.MinResponseBytes != 1024 || c.ProgressInterval != 750*time.Millisecond || c.AutoProbeTimeout != 1500*time.Millisecond {
+	if c.MaxRedirects != 1 || c.MaxInputBytes != 4096 || c.MaxInputEntries != 1234 || c.MaxResponseBytes != 2048 || c.IntelligenceBytes != 1536 || c.MinResponseBytes != 1024 || c.ProgressInterval != 750*time.Millisecond || c.AutoProbeTimeout != 1500*time.Millisecond || c.ProxyDNSCacheTTL != 45*time.Second {
 		t.Fatalf("limits not applied: %+v", c)
 	}
 	if !c.AllowPrivate || !c.AllowRemoteDNS || !c.RetryPermanent || !c.StopOnSuccess || !c.Save {

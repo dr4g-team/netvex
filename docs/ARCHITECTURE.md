@@ -55,11 +55,20 @@ ordinary HTTP response failures never multiply connections. Proxy-side DNS
 continues to use one hostname request because the remote resolver selects the
 address.
 
+Proxy gateway DNS caching is a separate optional path because proxy endpoints
+are operator-supplied rather than validation destinations. It collapses
+concurrent lookups per normalized hostname, retains at most 4,096 hostname
+entries and 16 unique addresses per hostname, rotates cache hits atomically,
+does not cache failures, and shares the existing connect deadline. Literal IP
+endpoints bypass it. A single concurrency-safe `net.Dialer` is reused by the
+checker; established proxy connections are deliberately never pooled between
+measurements.
+
 Deduplication retains process-local seeded 96-bit identities so credential variants
 remain distinct without exposing a credential-derived public ID or serializable
 credential verifier. Persisted IDs
-are 96-bit endpoint hashes over protocol, host, and port. JSONL output writes
-directly through a streaming encoder. These keep
+are 96-bit endpoint hashes over protocol, host, and port. Result encoders use a
+bounded 64 KiB output buffer to batch small writes. These keep
 allocation and resident-memory growth low on large datasets; exact
 deduplication can be disabled for constant parser state.
 

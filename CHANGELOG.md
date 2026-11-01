@@ -18,6 +18,14 @@ All notable changes to NetVex are documented in this file. The project uses
   answers for upstream, SOCKS, and TLS failures attributable to one target IP.
 - GitHub Actions dependencies pinned to verified immutable commits, with
   checkout credentials disabled after source retrieval.
+- A bounded, single-flight proxy-gateway DNS cache with address rotation,
+  shared connect deadlines, and a one-minute default in the `fast` profile.
+- Buffered result serialization that batches small JSONL, CSV, TXT, and table
+  writes while preserving broken-pipe error propagation.
+- A lower-allocation response evidence loop and boundary-only streaming ASCII
+  matcher that avoid copying complete network blocks.
+- Credential-bearing result strings are now constructed only for an explicitly
+  requested private working-proxy export.
 - Streaming multi-pattern response matching for ASCII content assertions,
   avoiding full-body retention and a second lowercase copy while preserving a
   Unicode-compatible bounded path.

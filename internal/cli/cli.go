@@ -141,7 +141,7 @@ type checkOptions struct {
 	concurrency                                                 string
 	queueSize, perTarget, repeat, maxInputEntries               int
 	connectTimeout, requestTimeout, autoProbeTimeout            string
-	dnsCacheTTL, retryBackoff                                   string
+	dnsCacheTTL, proxyDNSCacheTTL, retryBackoff                 string
 	progressInterval                                            string
 	targets, allowHosts, requireText, rejectText, expectJSON    stringsFlag
 	allowPrivate, allowRemoteDNS, save, requireSuccess, verbose bool
@@ -229,6 +229,7 @@ func (c CLI) addCheckFlags(fs *flag.FlagSet, o *checkOptions) {
 	fs.StringVar(&o.requestTimeout, "request-timeout", "", "overall attempt timeout")
 	fs.StringVar(&o.autoProbeTimeout, "auto-probe-timeout", "", "maximum time for each protocol candidate in auto mode")
 	fs.StringVar(&o.dnsCacheTTL, "dns-cache-ttl", "", "cache approved target DNS answers (0 disables)")
+	fs.StringVar(&o.proxyDNSCacheTTL, "proxy-dns-cache-ttl", "", "cache proxy gateway DNS answers (0 disables)")
 	fs.StringVar(&o.retryBackoff, "retry-backoff", "", "initial exponential backoff after transient failure")
 	fs.StringVar(&o.progressInterval, "progress-interval", "", "verbose progress refresh interval (50ms..1m)")
 	fs.Var(&o.targets, "target", "validation URL (repeatable)")
@@ -376,6 +377,9 @@ func (c CLI) loadCheck(o checkOptions) (config.Config, model.Protocol, output.Fo
 	if o.dnsCacheTTL != "" {
 		cfg.DNSCacheTTLRaw = o.dnsCacheTTL
 	}
+	if o.proxyDNSCacheTTL != "" {
+		cfg.ProxyDNSCacheRaw = o.proxyDNSCacheTTL
+	}
 	if o.retryBackoff != "" {
 		cfg.RetryBackoffRaw = o.retryBackoff
 	}
@@ -478,6 +482,7 @@ func applyProfile(cfg *config.Config, name string) error {
 		cfg.ConnectTimeoutRaw = "3s"
 		cfg.RequestTimeoutRaw = "8s"
 		cfg.RetryBackoffRaw = "0s"
+		cfg.ProxyDNSCacheRaw = "1m"
 	case "balanced":
 		cfg.Repeat = 2
 		cfg.MinSuccessRate = 0.5
@@ -587,6 +592,7 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 	checker := engine.NewChecker(cfg)
 	checker.Metadata = metadataProvider
 	checker.Label = o.label
+	checker.IncludeInputProxy = o.workingOutput != ""
 	if err := checker.ConfigureCABundles(cfg.CABundle, cfg.ProxyCABundle); err != nil {
 		fmt.Fprintln(c.Stderr, "TLS configuration error:", err)
 		return ExitUsage
@@ -845,7 +851,10 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 	}()
 	runner := engine.Engine{Workers: cfg.Concurrency, QueueSize: cfg.QueueSize, Processor: checker}
 	results := runner.Run(ctx, jobs)
-	writer := output.New(c.Stdout, outFmt, color)
+	var writer *output.Writer
+	if !o.quiet {
+		writer = output.New(c.Stdout, outFmt, color)
+	}
 	var history *store.RunWriter
 	if cfg.Save {
 		history, err = store.NewRunWriter(cfg.DataDir)
@@ -968,9 +977,11 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 			}
 		}
 	}
-	if err := writer.Flush(); err != nil {
-		fmt.Fprintln(c.Stderr, "output error:", err)
-		return ExitOperational
+	if writer != nil {
+		if err := writer.Flush(); err != nil {
+			fmt.Fprintln(c.Stderr, "output error:", err)
+			return ExitOperational
+		}
 	}
 	summary.Input = <-statsCh
 	summary.Input.Resumed = int(resumed.Load())
@@ -1118,7 +1129,7 @@ func runConfiguration(cfg config.Config, proto model.Protocol, o checkOptions) m
 		QueueSize: cfg.QueueSize, PerTarget: cfg.PerTarget, RateLimit: cfg.RateLimit,
 		Repeat: cfg.Repeat, MinSuccessRate: cfg.MinSuccessRate, ConnectTimeout: cfg.ConnectTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(), AutoProbeTimeout: cfg.AutoProbeTimeout.String(),
 		RetryBackoff: cfg.RetryBackoff.String(), StopOnSuccess: cfg.StopOnSuccess,
-		RetryPermanent: cfg.RetryPermanent, AllowRemoteDNS: cfg.AllowRemoteDNS,
+		RetryPermanent: cfg.RetryPermanent, AllowRemoteDNS: cfg.AllowRemoteDNS, ProxyDNSCacheTTL: cfg.ProxyDNSCacheTTL.String(),
 		MaxResponseBytes: cfg.MaxResponseBytes, IntelligenceBytes: min(cfg.IntelligenceBytes, cfg.MaxResponseBytes), MinResponseBytes: cfg.MinResponseBytes, MinThroughput: cfg.MinThroughputKBPS,
 		ContentRules:    len(cfg.RequireText) + len(cfg.RejectText) + len(cfg.ExpectJSON),
 		MetadataEnabled: cfg.MetadataFile != "",
@@ -2076,6 +2087,11 @@ func (c CLI) doctor(args []string) int {
 			}
 		}
 		fmt.Fprintf(c.Stdout, "auto workers   OK  recommended=%d\n", recommendedConcurrency())
+		if cfg.ProxyDNSCacheTTL > 0 {
+			fmt.Fprintf(c.Stdout, "proxy DNS      OK  cache_ttl=%s bounded_entries=%d\n", cfg.ProxyDNSCacheTTL, min(cfg.MaxInputEntries, 4096))
+		} else {
+			fmt.Fprintln(c.Stdout, "proxy DNS      OK  cache=disabled")
+		}
 		captureLimit := cfg.ResponseCaptureLimit()
 		upperBound := captureLimit * int64(cfg.Concurrency)
 		fmt.Fprintf(c.Stdout, "body capture   OK  per_worker=%d upper_bound=%d budget=%d\n", captureLimit, upperBound, config.MaxConcurrentCaptureBytes)

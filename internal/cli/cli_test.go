@@ -264,7 +264,7 @@ func TestResumeIncludesCheckpointResults(t *testing.T) {
 func TestShellCompletions(t *testing.T) {
 	for _, shell := range []string{"bash", "zsh", "fish"} {
 		code, out, diag := run([]string{"completion", shell}, "")
-		if code != ExitOK || !strings.Contains(out, "netvex") || !strings.Contains(out, "auto-probe-timeout") || !strings.Contains(out, "intelligence-bytes") || !strings.Contains(out, "keep-partial") || diag != "" {
+		if code != ExitOK || !strings.Contains(out, "netvex") || !strings.Contains(out, "auto-probe-timeout") || !strings.Contains(out, "intelligence-bytes") || !strings.Contains(out, "keep-partial") || !strings.Contains(out, "proxy-dns-cache-ttl") || diag != "" {
 			t.Fatalf("shell=%s code=%d out=%q diag=%q", shell, code, out, diag)
 		}
 	}
@@ -344,8 +344,9 @@ func TestRunsListsSavedSummaries(t *testing.T) {
 func TestRunConfigurationSanitizesTargetSecrets(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Targets = []string{"https://target.test/private/token?api_key=secret#fragment"}
+	cfg.ProxyDNSCacheTTL = time.Minute
 	r := runConfiguration(cfg, model.ProtocolHTTP, checkOptions{profile: "fast", keepPartial: true})
-	if len(r.ValidationTarget) != 1 || r.ValidationTarget[0] != "https://target.test/" || !r.KeepPartial {
+	if len(r.ValidationTarget) != 1 || r.ValidationTarget[0] != "https://target.test/" || !r.KeepPartial || r.ProxyDNSCacheTTL != "1m0s" {
 		t.Fatalf("targets=%v", r.ValidationTarget)
 	}
 }
@@ -407,8 +408,12 @@ func TestExecutionProfilesAndOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Repeat != 3 || cfg.MinSuccessRate != 1 || !cfg.StopOnSuccess || cfg.RequestTimeout != 8*time.Second || cfg.RetryBackoff != 0 {
+	if cfg.Repeat != 3 || cfg.MinSuccessRate != 1 || !cfg.StopOnSuccess || cfg.RequestTimeout != 8*time.Second || cfg.RetryBackoff != 0 || cfg.ProxyDNSCacheTTL != time.Minute {
 		t.Fatalf("unexpected profile: %+v", cfg)
+	}
+	cfg, _, _, _, err = c.loadCheck(checkOptions{profile: "fast", protocol: "http", format: "table", inputFormat: "text", color: "never", rate: -1, maxRedirects: -1, proxyDNSCacheTTL: "0s"})
+	if err != nil || cfg.ProxyDNSCacheTTL != 0 {
+		t.Fatalf("proxy DNS cache override: ttl=%s err=%v", cfg.ProxyDNSCacheTTL, err)
 	}
 	if _, _, _, _, err := c.loadCheck(checkOptions{profile: "turbo", protocol: "http", format: "table", inputFormat: "text", color: "never", rate: -1, maxRedirects: -1}); err == nil {
 		t.Fatal("accepted unknown profile")

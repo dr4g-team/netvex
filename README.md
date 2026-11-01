@@ -201,7 +201,7 @@ The execution profiles are:
 
 | Profile | Attempts | Minimum success | Behavior |
 |---|---:|---:|---|
-| `fast` | 1 | 100% | Short timeouts, no retry delay, stops on success |
+| `fast` | 1 | 100% | Short timeouts, one-minute proxy DNS cache, no retry delay, stops on success |
 | `balanced` | 2 | 50% | Production default |
 | `thorough` | 5 | 80% | Longer timeouts and stronger reliability evidence |
 
@@ -217,7 +217,13 @@ control global workers, backpressure, destination pressure, and attempt start
 rate. Defaults are conservative for an ordinary VPS; increasing concurrency
 does not necessarily improve throughput. `--connect-timeout`,
 `--request-timeout`, `--auto-probe-timeout`, `--repeat`, `--retry-backoff`, and
-`--dns-cache-ttl` control failure cost and repeat behavior. Automatic protocol
+`--dns-cache-ttl` control failure cost and repeat behavior. For commercial
+gateway lists that repeat one hostname, `--proxy-dns-cache-ttl` coalesces
+concurrent lookups and rotates across at most 16 unique returned addresses;
+the cache itself is bounded to 4,096 hostnames and failures are never cached.
+It defaults to off except in the `fast` profile, where the default is one
+minute. Set it to `0s` when fresh DNS selection is part of the proxy service's
+session semantics. Automatic protocol
 detection gives each candidate a fair bounded share of the overall timeout and
 prioritizes likely protocols for common HTTP, HTTPS, and SOCKS ports.
 
@@ -317,8 +323,9 @@ bounded reads, and no environment proxy.
 
 ## Configuration
 
-Precedence is command-line flags, `NETVEX_*` environment variables, a JSON
-configuration file, then built-in defaults.
+Precedence is explicit command-line flags, the selected execution profile,
+`NETVEX_*` environment variables, a JSON configuration file, then built-in
+defaults. A profile only overlays the settings it owns.
 
 ```sh
 netvex config show
@@ -332,7 +339,7 @@ Environment configuration covers every persistent engine setting:
 |---|---|
 | Concurrency | `NETVEX_CONCURRENCY`, `NETVEX_QUEUE_SIZE`, `NETVEX_PER_TARGET_CONCURRENCY`, `NETVEX_REQUESTS_PER_SECOND` |
 | Measurements | `NETVEX_REPEAT`, `NETVEX_MIN_SUCCESS_RATE`, `NETVEX_STOP_ON_SUCCESS`, `NETVEX_RETRY_PERMANENT_FAILURES`, `NETVEX_ROTATION_SAMPLES`, `NETVEX_ROTATION_INTERVAL` |
-| Time | `NETVEX_CONNECT_TIMEOUT`, `NETVEX_REQUEST_TIMEOUT`, `NETVEX_AUTO_PROBE_TIMEOUT`, `NETVEX_DNS_CACHE_TTL`, `NETVEX_RETRY_BACKOFF`, `NETVEX_PROGRESS_INTERVAL` |
+| Time | `NETVEX_CONNECT_TIMEOUT`, `NETVEX_REQUEST_TIMEOUT`, `NETVEX_AUTO_PROBE_TIMEOUT`, `NETVEX_DNS_CACHE_TTL`, `NETVEX_PROXY_DNS_CACHE_TTL`, `NETVEX_RETRY_BACKOFF`, `NETVEX_PROGRESS_INTERVAL` |
 | Destinations | `NETVEX_TARGETS`, `NETVEX_ALLOWED_TARGET_HOSTS`, `NETVEX_MAX_REDIRECTS`, `NETVEX_ALLOW_PRIVATE_TARGETS`, `NETVEX_ALLOW_REMOTE_DNS`, `NETVEX_TARGET_MATRIX`, `NETVEX_TARGET_QUORUM`, `NETVEX_PREFLIGHT` |
 | Response qualification | `NETVEX_MIN_RESPONSE_BYTES`, `NETVEX_MIN_THROUGHPUT_KBPS`, `NETVEX_REQUIRE_TEXT`, `NETVEX_REJECT_TEXT`, `NETVEX_EXPECT_JSON`, `NETVEX_EXPECTED_BODY_SHA256`, `NETVEX_ANONYMITY_BASELINE_IP` |
 | TLS trust | `NETVEX_CA_BUNDLE`, `NETVEX_PROXY_CA_BUNDLE` |

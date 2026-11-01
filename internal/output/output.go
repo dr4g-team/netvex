@@ -1,6 +1,7 @@
 package output
 
 import (
+	"bufio"
 	"encoding/csv"
 	"encoding/json"
 	"fmt"
@@ -32,6 +33,7 @@ func ParseFormat(s string) (Format, error) {
 
 type Writer struct {
 	out    io.Writer
+	buffer *bufio.Writer
 	format Format
 	color  bool
 	header bool
@@ -40,11 +42,12 @@ type Writer struct {
 }
 
 func New(out io.Writer, format Format, color bool) *Writer {
-	w := &Writer{out: out, format: format, color: color}
+	buffer := bufio.NewWriterSize(out, 64<<10)
+	w := &Writer{out: buffer, buffer: buffer, format: format, color: color}
 	if format == FormatCSV {
-		w.csv = csv.NewWriter(out)
+		w.csv = csv.NewWriter(buffer)
 	} else if format == FormatJSONL {
-		w.json = json.NewEncoder(out)
+		w.json = json.NewEncoder(buffer)
 	}
 	return w
 }
@@ -135,9 +138,11 @@ func (w *Writer) WriteResult(r model.Result) error {
 func (w *Writer) Flush() error {
 	if w.csv != nil {
 		w.csv.Flush()
-		return w.csv.Error()
+		if err := w.csv.Error(); err != nil {
+			return err
+		}
 	}
-	return nil
+	return w.buffer.Flush()
 }
 
 func WriteDetailed(out io.Writer, r model.Result) error {

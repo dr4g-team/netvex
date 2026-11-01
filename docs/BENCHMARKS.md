@@ -173,3 +173,38 @@ one live waiter and channel per active socket under high concurrency.
 ```sh
 go test -run '^$' -bench '^BenchmarkWatchContextClose$' -benchmem -count=5 ./internal/protocol
 ```
+
+### Gateway DNS, evidence, and output batching
+
+On 2026-11-01, the response evidence loop was changed from a composed
+`LimitReader`/`MultiWriter` pipeline to one bounded incremental loop. The ASCII
+matcher now scans network blocks directly and allocates only a small boundary
+window for cross-block matches. Five samples on the same host measured:
+
+| Path | Median time/op | Bytes/op | Allocations/op |
+|---|---:|---:|---:|
+| 1 MiB, 64 KiB capture | 4.93 ms | 65,985 | 4 |
+| 1 MiB, absent streaming assertion | 5.05 ms | 65,997 | 8 |
+
+The preceding implementation used 10 allocations for ordinary capture and 16
+allocations plus roughly 140 KiB for the assertion path. CPU time remained
+within normal VPS variance while assertion memory fell by about 53%.
+
+Cached proxy-gateway address selection measured 524 ns/op median, 64 B/op, and
+two allocations across five sequential samples. The cache-hit benchmark does
+not include DNS network latency; it establishes that cache coordination is
+negligible relative to a proxy connection. Reproduce with:
+
+```sh
+go test -run '^$' -bench '^BenchmarkProxyDNSCacheHit' -benchmem -count=5 ./internal/protocol
+go test -run '^$' -bench '^BenchmarkWriter$' -benchmem -count=5 ./internal/output
+```
+
+Result writers now batch output in 64 KiB chunks. Current serializer medians
+were 301 ns/result for TXT, 3.50 us/result for JSONL, and 1.91 us/result for
+CSV. These are encoding costs against `io.Discard`, not disk-throughput claims.
+
+The controlled 500,000-item scheduler was also rerun three times at concurrency
+128 against this tree. It measured 910,336 items/s median (range
+888,071-972,978 items/s). This is an engine-overhead regression signal from a
+non-isolated host, not a claim about real proxy throughput.

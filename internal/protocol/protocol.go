@@ -55,17 +55,38 @@ type Connector struct {
 	ConnectTimeout time.Duration
 	AllowRemoteDNS bool
 	DialContext    func(context.Context, string, string) (net.Conn, error)
+	Dialer         *net.Dialer
+	ProxyDNS       *ProxyDNSCache
 	TLSConfig      *tls.Config
 }
 
 func (c Connector) Open(ctx context.Context, proxy model.Proxy, dest policy.Destination) (TimedConn, error) {
 	start := time.Now()
-	dial := c.DialContext
-	if dial == nil {
-		d := &net.Dialer{Timeout: c.ConnectTimeout, KeepAlive: -1}
-		dial = d.DialContext
+	connectCtx := ctx
+	cancelConnect := func() {}
+	if c.ConnectTimeout > 0 {
+		connectCtx, cancelConnect = context.WithTimeout(ctx, c.ConnectTimeout)
 	}
-	conn, err := dial(ctx, "tcp", proxy.Address())
+	defer cancelConnect()
+	address := proxy.Address()
+	if c.ProxyDNS != nil {
+		var err error
+		address, err = c.ProxyDNS.Address(connectCtx, proxy.Host, proxy.Port)
+		if err != nil {
+			return TimedConn{}, classifyNet(model.StageConnect, "proxy_dns", err)
+		}
+	}
+	var conn net.Conn
+	var err error
+	switch {
+	case c.DialContext != nil:
+		conn, err = c.DialContext(connectCtx, "tcp", address)
+	case c.Dialer != nil:
+		conn, err = c.Dialer.DialContext(connectCtx, "tcp", address)
+	default:
+		dialer := net.Dialer{KeepAlive: -1}
+		conn, err = dialer.DialContext(connectCtx, "tcp", address)
+	}
 	connectTime := time.Since(start)
 	if err != nil {
 		return TimedConn{}, classifyNet(model.StageConnect, "proxy_connect", err)

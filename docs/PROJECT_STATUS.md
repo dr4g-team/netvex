@@ -1,6 +1,6 @@
 # Project status
 
-Last verified: 2026-10-31
+Last verified: 2026-11-01
 
 ## Objective and architecture
 
@@ -27,6 +27,8 @@ It is not represented as a completed independent security audit.
 - Bounded concurrency, target pressure, rate, retries, timeouts, cancellation,
   safe redirects, DNS policy, bounded multi-address fallback, response
   assertions, and transfer measurements.
+- Optional bounded single-flight proxy DNS caching with multi-address rotation,
+  one shared concurrency-safe dialer, and one connect deadline across DNS/TCP.
 - Evidence-based anonymity levels and offline longest-prefix exit metadata.
 - Target matrices, named declarative scenarios, quorum qualification, direct
   preflight, response hashes, custom CA bundles, and TLS evidence.
@@ -45,12 +47,12 @@ It is not represented as a completed independent security audit.
 ## Verification record
 
 - `make check`: passed (`go vet`, all unit/integration tests, race detector).
-- Parser fuzzing: 239,885 executions in 10 seconds with no failure.
-- HTTP response fuzzing: 190,621 executions in 10 seconds covering valid,
+- Parser fuzzing: 118,739 executions in 10 seconds with no failure.
+- HTTP response fuzzing: 105,011 executions in 10 seconds covering valid,
   truncated, malformed, and oversized inputs with no failure.
-- Package coverage: core packages range from 46.1% to 100%; engine 72.8%,
-  protocol 77.8%, input 80.3%, policy 85.7%, and metadata 81.1%.
-- Controlled 500,000-item scheduler: 812,682 items/s median at concurrency 128
+- Package coverage: core packages range from 46.1% to 100%; engine 74.2%,
+  protocol 80.8%, input 80.3%, policy 85.7%, and metadata 81.1%.
+- Controlled 500,000-item scheduler: 910,336 items/s median at concurrency 128
   across three runs on the non-isolated delivery host.
 - Offline IPv4 metadata lookup: 411 ns/op median, zero allocations across three
   benchmark samples.
@@ -67,6 +69,11 @@ It is not represented as a completed independent security audit.
   limited to assertion-enabled checks.
 - Cancellation registration and normal close measured 0.85-0.90 us/op and
   200 B/op while avoiding a permanently waiting goroutine per active socket.
+- The revised evidence loop retained 1 MiB response throughput at 4.93 ms/op
+  median while reducing ordinary allocations from 10 to 4; streaming assertion
+  memory fell from about 140 KiB to 66 KiB and allocations from 16 to 8.
+- Proxy DNS cache hits measured 524 ns/op median; buffered serializers measured
+  301 ns/result for TXT, 3.50 us for JSONL, and 1.91 us for CSV.
 
 The benchmark conditions and historical results are in
 [BENCHMARKS.md](BENCHMARKS.md). Controlled local fixtures are used instead of

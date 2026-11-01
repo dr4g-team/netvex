@@ -70,6 +70,8 @@ The embedded run configuration records `max_response_bytes`,
 `intelligence_body_bytes`, `min_response_bytes`, and `auto_probe_timeout`,
 making response-memory, throughput, and protocol-detection conditions
 reproducible without consulting the original command line.
+`proxy_dns_cache_ttl` records whether gateway resolution reuse affected the
+run; `0s` means every hostname dial used the system resolver normally.
 `keep_partial` records the explicit interruption-output policy when enabled.
 
 When a quality policy is active, `quality` contains a boolean result and the

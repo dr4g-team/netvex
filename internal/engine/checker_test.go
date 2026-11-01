@@ -113,6 +113,34 @@ func TestHTTPValidationAndIntelligence(t *testing.T) {
 	}
 }
 
+func TestCredentialBearingInputProxyIsExplicit(t *testing.T) {
+	proxy := model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080, Credentials: &model.Credentials{Username: "user", Password: "s%cret"}}
+	check := func(include bool) model.Result {
+		c := baseChecker("http://target.test/")
+		c.IncludeInputProxy = include
+		c.Connector.DialContext = pipeDial(func(conn net.Conn) {
+			reader := bufio.NewReader(conn)
+			_, _ = http.ReadRequest(reader)
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+			_, _ = http.ReadRequest(reader)
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")
+		})
+		return c.Check(context.Background(), proxy)
+	}
+	if result := check(false); result.InputProxy != "" {
+		t.Fatalf("credential URI retained without export: %q", result.InputProxy)
+	}
+	if result := check(true); !strings.Contains(result.InputProxy, "user:s%25cret@proxy.test:8080") {
+		t.Fatalf("credential URI missing for explicit export: %q", result.InputProxy)
+	}
+	failed := baseChecker("http://target.test/")
+	failed.IncludeInputProxy = true
+	failed.Connector.DialContext = func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("offline") }
+	if result := failed.Check(context.Background(), proxy); result.InputProxy != "" {
+		t.Fatalf("failed proxy retained credential URI: %q", result.InputProxy)
+	}
+}
+
 func TestDestinationAddressFallback(t *testing.T) {
 	c := baseChecker("http://target.test/")
 	c.Policy.Resolver = fixedResolver{ips: []netip.Addr{netip.MustParseAddr("1.1.1.1"), netip.MustParseAddr("8.8.8.8")}}
@@ -216,6 +244,27 @@ func TestReadBodyEvidenceStreamsAndCapsCapture(t *testing.T) {
 	}
 }
 
+type emptyBodyReader struct{ reads int }
+
+func (r *emptyBodyReader) Read([]byte) (int, error) {
+	r.reads++
+	return 0, nil
+}
+
+type shortEvidenceWriter struct{}
+
+func (shortEvidenceWriter) Write(value []byte) (int, error) { return len(value) - 1, nil }
+
+func TestReadBodyEvidencePropagatesStreamingFailures(t *testing.T) {
+	empty := &emptyBodyReader{}
+	if _, _, _, err := readBodyEvidence(empty, 1024, 1024, 0, nil); !errors.Is(err, io.ErrNoProgress) || empty.reads != 100 {
+		t.Fatalf("empty reads=%d err=%v", empty.reads, err)
+	}
+	if _, count, _, err := readBodyEvidence(strings.NewReader("payload"), 1024, 1024, 0, shortEvidenceWriter{}); !errors.Is(err, io.ErrShortWrite) || count != 7 {
+		t.Fatalf("count=%d err=%v", count, err)
+	}
+}
+
 func TestTextMatcherStreamsAcrossChunks(t *testing.T) {
 	plan := compileTextMatchPlan([]string{"cloudflare", "access denied"}, []string{"captcha", "turnstile"})
 	if plan == nil {
@@ -233,6 +282,9 @@ func TestTextMatcherStreamsAcrossChunks(t *testing.T) {
 	}
 	if got := compileTextMatchPlan([]string{"café"}, nil); got != nil {
 		t.Fatal("Unicode rule must use the compatibility capture path")
+	}
+	if got := compileTextMatchPlan([]string{""}, nil); got != nil {
+		t.Fatal("empty rule must use validated compatibility handling")
 	}
 }
 
