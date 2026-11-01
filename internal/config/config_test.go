@@ -5,6 +5,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -224,5 +225,84 @@ func TestDataDirEnvironmentAppliesToDefaults(t *testing.T) {
 	t.Setenv("NETVEX_DATA_DIR", "/tmp/netvex-env-dir")
 	if dir := Defaults().DataDir; dir != "/tmp/netvex-env-dir" {
 		t.Fatalf("dir=%q", dir)
+	}
+}
+
+func TestValidateRejectsEachUnsafeSetting(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*Config)
+		want   string
+	}{
+		{"concurrency", func(c *Config) { c.Concurrency = 0 }, "concurrency"},
+		{"queue", func(c *Config) { c.QueueSize = 70000 }, "queue_size"},
+		{"per target", func(c *Config) { c.PerTarget = 0 }, "per_target"},
+		{"repeat", func(c *Config) { c.Repeat = 21 }, "repeat"},
+		{"success rate", func(c *Config) { c.MinSuccessRate = 1.5 }, "min_success_rate"},
+		{"rate", func(c *Config) { c.RateLimit = 0.01 }, "requests_per_second"},
+		{"connect", func(c *Config) { c.ConnectTimeout = time.Millisecond }, "connect_timeout"},
+		{"request", func(c *Config) { c.RequestTimeout = time.Second; c.ConnectTimeout = 2 * time.Second }, "request_timeout"},
+		{"auto probe", func(c *Config) { c.AutoProbeTimeout = time.Millisecond }, "auto_probe_timeout"},
+		{"dns cache", func(c *Config) { c.DNSCacheTTL = -1 }, "dns_cache_ttl"},
+		{"proxy dns", func(c *Config) { c.ProxyDNSCacheTTL = 48 * time.Hour }, "proxy_dns_cache_ttl"},
+		{"backoff", func(c *Config) { c.RetryBackoff = time.Minute }, "retry_backoff"},
+		{"rotation interval", func(c *Config) { c.RotationInterval = 2 * time.Hour }, "rotation_interval"},
+		{"canary", func(c *Config) { c.CanaryInterval = time.Millisecond }, "canary_interval"},
+		{"country code", func(c *Config) { c.ExpectCountries = []string{"USA"}; c.MetadataFile = "m" }, "two-letter"},
+		{"country needs metadata", func(c *Config) { c.ExpectCountries = []string{"US"} }, "metadata"},
+		{"prescreen workers", func(c *Config) { c.PrescreenWorkers = 0 }, "prescreen_concurrency"},
+		{"prescreen retries", func(c *Config) { c.PrescreenRetries = 9 }, "prescreen_retries"},
+		{"prescreen timeout", func(c *Config) { c.PrescreenTimeout = time.Millisecond }, "prescreen_timeout"},
+		{"rotation samples", func(c *Config) { c.RotationSamples = 1 }, "rotation_samples"},
+		{"progress", func(c *Config) { c.ProgressInterval = time.Millisecond }, "progress_interval"},
+		{"redirects", func(c *Config) { c.MaxRedirects = 11 }, "max_redirects"},
+		{"input bytes", func(c *Config) { c.MaxInputBytes = 0 }, "max_input_bytes"},
+		{"input entries", func(c *Config) { c.MaxInputEntries = 0 }, "max_input_entries"},
+		{"response bytes", func(c *Config) { c.MaxResponseBytes = 1 }, "max_response_bytes"},
+		{"intelligence bytes", func(c *Config) { c.IntelligenceBytes = 1 }, "intelligence_body_bytes"},
+		{"memory budget", func(c *Config) { c.Concurrency = 4096; c.IntelligenceBytes = 1 << 20 }, "512MiB"},
+		{"min response", func(c *Config) { c.MinResponseBytes = c.MaxResponseBytes + 1 }, "min_response_bytes"},
+		{"throughput needs size", func(c *Config) { c.MinThroughputKBPS = 1 }, "16384"},
+		{"body hash", func(c *Config) { c.ExpectedBodySHA = "zz" }, "expected_body_sha256"},
+		{"too many rules", func(c *Config) { c.RequireText = make([]string, 17) }, "at most 16"},
+		{"empty text rule", func(c *Config) { c.RejectText = []string{""} }, "content assertion"},
+		{"json rule", func(c *Config) { c.ExpectJSON = []string{"novalue"} }, "path=value"},
+		{"json path", func(c *Config) { c.ExpectJSON = []string{"a..b=1"} }, "dot-separated"},
+		{"baseline", func(c *Config) { c.AnonymityBaseline = "not-ip" }, "anonymity_baseline_ip"},
+		{"no targets", func(c *Config) { c.Targets = nil }, "at least one"},
+		{"too many targets", func(c *Config) { c.Targets = make([]string, 33) }, "at most 32"},
+		{"quorum", func(c *Config) { c.TargetQuorum = 5 }, "target_quorum"},
+		{"quorum needs matrix", func(c *Config) { c.TargetQuorum = 1 }, "requires target_matrix"},
+		{"matrix size", func(c *Config) {
+			c.TargetMatrix, c.RotationSamples = true, 50
+			c.Targets = nil
+			for index := range 32 {
+				c.Targets = append(c.Targets, "https://host"+strconv.Itoa(index)+".test/")
+			}
+		}, "1000-attempt"},
+		{"preflight", func(c *Config) { c.Preflight = "maybe" }, "preflight"},
+		{"bundle path", func(c *Config) { c.CABundle = "a\nb" }, "CA bundle"},
+		{"target scheme", func(c *Config) { c.Targets = []string{"ftp://example.com/"} }, "invalid URL"},
+		{"target credentials", func(c *Config) { c.Targets = []string{"https://u:p@example.com/"} }, "credentials"},
+		{"target port", func(c *Config) { c.Targets = []string{"https://example.com:0/"} }, "invalid port"},
+		{"unknown rule target", func(c *Config) { c.TargetRules = map[string]ResponseRules{"https://other.test/": {}} }, "target_rules"},
+		{"unknown label target", func(c *Config) { c.TargetLabels = map[string]string{"https://other.test/": "x"} }, "target_labels"},
+		{"too many hosts", func(c *Config) { c.AllowedHosts = make([]string, 65) }, "allowed target hosts"},
+		{"bad host", func(c *Config) { c.AllowedHosts = []string{"a/b"} }, "invalid allowed target host"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			c := Defaults()
+			if err := c.ParseDurations(); err != nil {
+				t.Fatal(err)
+			}
+			if err := c.Validate(); err != nil {
+				t.Fatalf("defaults are invalid: %v", err)
+			}
+			test.mutate(&c)
+			err := c.Validate()
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("err=%v want %q", err, test.want)
+			}
+		})
 	}
 }

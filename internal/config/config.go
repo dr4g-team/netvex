@@ -416,7 +416,30 @@ func (c *Config) ParseDurations() error {
 	return nil
 }
 
+// Validate reports the first setting outside safe bounds. Groups run in a fixed
+// order so the same invalid configuration always produces the same message.
 func (c Config) Validate() error {
+	for _, check := range []func() error{
+		c.validateScheduling,
+		c.validateTiming,
+		c.validateExpectedCountries,
+		c.validatePrescreen,
+		c.validateSampling,
+		c.validateLimits,
+		c.validateAssertions,
+		c.validateTargets,
+		c.validateTargetBindings,
+		c.validateAllowedHosts,
+	} {
+		if err := check(); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateScheduling checks scheduling bounds.
+func (c Config) validateScheduling() error {
 	if c.Concurrency < 1 || c.Concurrency > 4096 {
 		return errors.New("concurrency must be between 1 and 4096")
 	}
@@ -435,6 +458,11 @@ func (c Config) Validate() error {
 	if math.IsNaN(c.RateLimit) || math.IsInf(c.RateLimit, 0) || c.RateLimit < 0 || c.RateLimit > 100000 || (c.RateLimit > 0 && c.RateLimit < 0.1) {
 		return errors.New("requests_per_second must be 0 (disabled) or between 0.1 and 100000")
 	}
+	return nil
+}
+
+// validateTiming checks timeouts and intervals.
+func (c Config) validateTiming() error {
 	if c.ConnectTimeout < 100*time.Millisecond || c.ConnectTimeout > 2*time.Minute {
 		return errors.New("connect_timeout must be between 100ms and 2m")
 	}
@@ -459,6 +487,11 @@ func (c Config) Validate() error {
 	if c.CanaryInterval != 0 && (c.CanaryInterval < time.Second || c.CanaryInterval > time.Hour) {
 		return errors.New("canary_interval must be 0 (disabled) or between 1s and 1h")
 	}
+	return nil
+}
+
+// validateExpectedCountries checks expected exit countries.
+func (c Config) validateExpectedCountries() error {
 	if len(c.ExpectCountries) > 64 {
 		return errors.New("at most 64 expected countries are allowed")
 	}
@@ -470,6 +503,11 @@ func (c Config) Validate() error {
 	if len(c.ExpectCountries) > 0 && c.MetadataFile == "" {
 		return errors.New("expected countries require a metadata file")
 	}
+	return nil
+}
+
+// validatePrescreen checks the TCP prescreen stage.
+func (c Config) validatePrescreen() error {
 	if c.PrescreenWorkers < 1 || c.PrescreenWorkers > 65536 {
 		return errors.New("prescreen_concurrency must be between 1 and 65536")
 	}
@@ -479,6 +517,11 @@ func (c Config) Validate() error {
 	if c.PrescreenTimeout != 0 && (c.PrescreenTimeout < 100*time.Millisecond || c.PrescreenTimeout > 2*time.Minute) {
 		return errors.New("prescreen_timeout must be 0 (use connect_timeout) or between 100ms and 2m")
 	}
+	return nil
+}
+
+// validateSampling checks rotation sampling, progress, and redirects.
+func (c Config) validateSampling() error {
 	if c.RotationSamples != 0 && (c.RotationSamples < 2 || c.RotationSamples > 50) {
 		return errors.New("rotation_samples must be 0 (disabled) or between 2 and 50")
 	}
@@ -488,6 +531,11 @@ func (c Config) Validate() error {
 	if c.MaxRedirects < 0 || c.MaxRedirects > 10 {
 		return errors.New("max_redirects must be between 0 and 10")
 	}
+	return nil
+}
+
+// validateLimits checks input and response size limits.
+func (c Config) validateLimits() error {
 	if c.MaxInputBytes < 1 || c.MaxInputBytes > 10<<30 {
 		return errors.New("max_input_bytes is outside safe limits")
 	}
@@ -512,6 +560,11 @@ func (c Config) Validate() error {
 	if c.MinThroughputKBPS > 0 && c.MinResponseBytes < 16<<10 {
 		return errors.New("min_response_bytes must be at least 16384 when enforcing throughput")
 	}
+	return nil
+}
+
+// validateAssertions checks global response assertions.
+func (c Config) validateAssertions() error {
 	if c.ExpectedBodySHA != "" {
 		if len(c.ExpectedBodySHA) != 64 {
 			return errors.New("expected_body_sha256 must contain 64 hexadecimal characters")
@@ -544,6 +597,11 @@ func (c Config) Validate() error {
 			return errors.New("anonymity_baseline_ip must be an IP address")
 		}
 	}
+	return nil
+}
+
+// validateTargets checks targets, matrix settings, and trust paths.
+func (c Config) validateTargets() error {
 	if len(c.Targets) == 0 {
 		return errors.New("at least one validation target is required")
 	}
@@ -589,6 +647,11 @@ func (c Config) Validate() error {
 			}
 		}
 	}
+	return nil
+}
+
+// validateTargetBindings checks per-target rules and labels, which must name configured targets.
+func (c Config) validateTargetBindings() error {
 	knownTargets := make(map[string]struct{}, len(c.Targets))
 	for _, target := range c.Targets {
 		knownTargets[target] = struct{}{}
@@ -621,6 +684,11 @@ func (c Config) Validate() error {
 			return errors.New("target labels must contain 1 to 64 safe characters")
 		}
 	}
+	return nil
+}
+
+// validateAllowedHosts checks the redirect allowlist.
+func (c Config) validateAllowedHosts() error {
 	if len(c.AllowedHosts) > 64 {
 		return errors.New("at most 64 allowed target hosts are permitted")
 	}

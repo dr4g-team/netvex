@@ -40,6 +40,7 @@ type checkSession struct {
 	qualityPolicy   *qualitypkg.Policy
 	workingTemplate string
 	saveStatuses    map[model.Status]bool
+	outputStatuses  map[model.Status]bool
 	metadata        *metadatapkg.Provider
 
 	checker      *engine.Checker
@@ -200,6 +201,12 @@ func (s *checkSession) validateOptions() error {
 	}
 	if s.saveStatuses, err = parseStatusList(o.saveStatus); err != nil {
 		return err
+	}
+	if o.outputStatus != "all" {
+		// An empty result means every status, matching the --save-status default.
+		if s.outputStatuses, err = parseStatusList(o.outputStatus); err != nil {
+			return errors.New("output-status is invalid")
+		}
 	}
 	if o.metricsOutput == "-" {
 		return errors.New("metrics-output requires a file path; use stats --prometheus for stdout")
@@ -563,7 +570,7 @@ func (s *checkSession) record(r model.Result, fresh bool) error {
 			return fmt.Errorf("checkpoint: %w", err)
 		}
 	}
-	if !o.quiet && (o.outputStatus == "all" || o.outputStatus == string(r.Status)) {
+	if !o.quiet && (len(s.outputStatuses) == 0 || s.outputStatuses[r.Status]) {
 		if s.detailed {
 			if err := output.WriteDetailed(s.cli.Stdout, r); err != nil {
 				return fmt.Errorf("output: %w", err)

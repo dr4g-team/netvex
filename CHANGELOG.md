@@ -6,6 +6,13 @@ All notable changes to NetVex are documented in this file. The project uses
 
 ## [Unreleased]
 
+### Changed
+
+- `--output-status` accepts a comma-separated list.
+- Commit history on `main` after `427e7fe` was rewritten to remove co-author
+  trailers, so tag `v0.7.0` is not an ancestor of `main`. Its tree is identical to
+  the commit `4313964` on `main`.
+
 ## [0.7.0] - 2026-11-01
 
 ### Changed
@@ -34,8 +41,13 @@ All notable changes to NetVex are documented in this file. The project uses
 - `--resume` skipped every other account on a shared gateway after the first.
 - `--resume` never retried interrupted proxies, and a cancelled proxy could record a
   failure it never earned.
-- Resume could not work on Windows, where mandatory locks block the second handle
-  it read through and append-only handles cannot truncate.
+- Resume now reads through the handle holding the checkpoint lock and truncates
+  without an append-only handle. Windows locks are mandatory, so the earlier approach
+  was expected to fail there; this was inferred from the code and no such failure
+  was observed.
+- Fast transfers on Windows could measure zero duration, which recorded zero
+  throughput and failed `--min-throughput-kbps` on healthy proxies. This was the
+  observed cause of the Windows test failure present since the job was added.
 - One long `Proxy-Authenticate` header aborted a whole `--save` run.
 - Ctrl-C hung while stdin stayed open; a second Ctrl-C now ends a stuck shutdown.
 - `--rate` was capped near 900/s by accumulating timer overshoot.

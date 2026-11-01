@@ -115,7 +115,7 @@ func (c CLI) addCheckFlags(fs *flag.FlagSet, o *checkOptions) {
 	fs.BoolVar(&o.stopOnSuccess, "stop-on-success", false, "stop remaining measurements once the reliability threshold is reached")
 	fs.BoolVar(&o.noDeduplicate, "no-deduplicate", false, "disable exact deduplication to use bounded parser memory")
 	fs.BoolVar(&o.quiet, "quiet", false, "suppress per-proxy stdout; summaries and errors remain on stderr")
-	fs.StringVar(&o.outputStatus, "output-status", "all", "stdout results: all, ok, failed, timeout, auth_failed, policy_blocked, invalid, inconclusive, unreliable, interrupted")
+	fs.StringVar(&o.outputStatus, "output-status", "all", "stdout results: all, or a comma-separated list of ok, failed, timeout, auth_failed, policy_blocked, invalid, inconclusive, unreliable, interrupted")
 	fs.StringVar(&o.workingOutput, "working-output", "", "write validated proxies with credentials to a mode-0600 file")
 	fs.StringVar(&o.workingDir, "working-dir", "", "write validated proxies to one mode-0600 file per protocol in this directory")
 	fs.StringVar(&o.workingTemplate, "working-template", "", "working line format: uri, hostport, colon, or a template using {protocol} {user} {pass} {host} {port} {hostport} {uri}")
@@ -144,23 +144,60 @@ func (c CLI) addCheckFlags(fs *flag.FlagSet, o *checkOptions) {
 	fs.BoolVar(&o.verbose, "verbose", false, "show rejected inputs and progress on stderr")
 }
 
+// override applies a flag on top of the configuration when it was supplied.
+func override[T any](target *T, value T, supplied bool) {
+	if supplied {
+		*target = value
+	}
+}
+
+// loadCheck resolves precedence: configuration file and environment, then the
+// scenario, then the profile, and finally explicit flags.
 func (c CLI) loadCheck(o checkOptions) (config.Config, model.Protocol, output.Format, bool, error) {
-	cfg, err := config.Load(o.configPath)
+	cfg, err := loadBaseConfig(o)
 	if err != nil {
 		return cfg, "", "", false, err
 	}
-	if o.scenarioPath != "" {
-		document, scenarioErr := scenario.Load(o.scenarioPath)
-		if scenarioErr != nil {
-			return cfg, "", "", false, scenarioErr
-		}
-		if scenarioErr := scenario.Apply(document, &cfg); scenarioErr != nil {
-			return cfg, "", "", false, scenarioErr
-		}
-	}
-	if err := applyProfile(&cfg, o.profile); err != nil {
+	if err := applyConcurrencyFlag(&cfg, o); err != nil {
 		return cfg, "", "", false, err
 	}
+	applySchedulingFlags(&cfg, o)
+	applyResponseFlags(&cfg, o)
+	applyEvidenceFlags(&cfg, o)
+	applyTimingFlags(&cfg, o)
+	applyPolicyFlags(&cfg, o)
+	if err := cfg.ParseDurations(); err != nil {
+		return cfg, "", "", false, err
+	}
+	cfg.AllowedHosts = allowedHosts(cfg, o)
+	if err := cfg.Validate(); err != nil {
+		return cfg, "", "", false, err
+	}
+	protocol, format, color, err := c.outputSettings(o)
+	if err != nil {
+		return cfg, "", "", false, err
+	}
+	return cfg, protocol, format, color, nil
+}
+
+func loadBaseConfig(o checkOptions) (config.Config, error) {
+	cfg, err := config.Load(o.configPath)
+	if err != nil {
+		return cfg, err
+	}
+	if o.scenarioPath != "" {
+		document, err := scenario.Load(o.scenarioPath)
+		if err != nil {
+			return cfg, err
+		}
+		if err := scenario.Apply(document, &cfg); err != nil {
+			return cfg, err
+		}
+	}
+	return cfg, applyProfile(&cfg, o.profile)
+}
+
+func applyConcurrencyFlag(cfg *config.Config, o checkOptions) error {
 	if o.concurrency != "" {
 		if strings.EqualFold(o.concurrency, "auto") {
 			cfg.Concurrency = recommendedConcurrency()
@@ -174,216 +211,129 @@ func (c CLI) loadCheck(o checkOptions) (config.Config, model.Protocol, output.Fo
 		} else {
 			value, parseErr := strconv.Atoi(o.concurrency)
 			if parseErr != nil {
-				return cfg, "", "", false, errors.New("concurrency must be an integer or auto")
+				return errors.New("concurrency must be an integer or auto")
 			}
 			cfg.Concurrency = value
 		}
 	}
-	if o.queueSize != 0 {
-		cfg.QueueSize = o.queueSize
-	}
-	if o.perTarget != 0 {
-		cfg.PerTarget = o.perTarget
-	}
-	if o.rate != -1 {
-		cfg.RateLimit = o.rate
-	}
-	if o.repeat != 0 {
-		cfg.Repeat = o.repeat
-	}
-	if o.maxInputBytes > 0 || o.explicit["max-input-bytes"] {
-		cfg.MaxInputBytes = o.maxInputBytes
-	}
-	if o.maxInputEntries > 0 || o.explicit["max-input-entries"] {
-		cfg.MaxInputEntries = o.maxInputEntries
-	}
-	if o.maxResponseBytes > 0 || o.explicit["max-response-bytes"] {
-		cfg.MaxResponseBytes = o.maxResponseBytes
-	}
-	if o.intelligenceBytes > 0 || o.explicit["intelligence-bytes"] {
-		cfg.IntelligenceBytes = o.intelligenceBytes
-	}
-	if o.minSuccessRate != -1 && o.minSuccessRate != 0 {
-		cfg.MinSuccessRate = o.minSuccessRate
-	}
-	if o.minResponseBytes > 0 || o.explicit["min-response-bytes"] {
-		cfg.MinResponseBytes = o.minResponseBytes
-	}
-	if o.minThroughput > 0 || o.explicit["min-throughput-kbps"] {
-		cfg.MinThroughputKBPS = o.minThroughput
-	}
-	if len(o.requireText) > 0 {
-		cfg.RequireText = append([]string(nil), o.requireText...)
-	}
-	if len(o.rejectText) > 0 {
-		cfg.RejectText = append([]string(nil), o.rejectText...)
-	}
-	if len(o.expectJSON) > 0 {
-		cfg.ExpectJSON = append([]string(nil), o.expectJSON...)
-	}
-	if o.expectedBodySHA != "" || o.explicit["expect-sha256"] {
-		cfg.ExpectedBodySHA = strings.ToLower(strings.TrimSpace(o.expectedBodySHA))
-	}
-	if o.baselineIP != "" || o.explicit["baseline-ip"] {
-		cfg.AnonymityBaseline = o.baselineIP
-	}
-	if o.metadataFile != "" || o.explicit["metadata-file"] {
-		cfg.MetadataFile = o.metadataFile
-	}
-	if o.caBundle != "" || o.explicit["ca-bundle"] {
-		cfg.CABundle = o.caBundle
-	}
-	if o.proxyCABundle != "" || o.explicit["proxy-ca-bundle"] {
-		cfg.ProxyCABundle = o.proxyCABundle
-	}
-	if o.targetMatrix || o.explicit["target-matrix"] {
-		cfg.TargetMatrix = o.targetMatrix
-	}
-	if o.targetQuorum >= 0 {
-		cfg.TargetQuorum = o.targetQuorum
-	}
-	if o.rotationSamples >= 0 {
-		cfg.RotationSamples = o.rotationSamples
-	}
-	if o.rotationInterval != "" {
-		cfg.RotationRaw = o.rotationInterval
-	}
-	if o.preflight != "" {
-		cfg.Preflight = strings.ToLower(o.preflight)
-	}
-	if o.connectTimeout != "" {
-		cfg.ConnectTimeoutRaw = o.connectTimeout
-	}
-	if o.requestTimeout != "" {
-		cfg.RequestTimeoutRaw = o.requestTimeout
-	}
-	if o.autoProbeTimeout != "" {
-		cfg.AutoProbeRaw = o.autoProbeTimeout
-	}
-	if o.dnsCacheTTL != "" {
-		cfg.DNSCacheTTLRaw = o.dnsCacheTTL
-	}
-	if o.proxyDNSCacheTTL != "" {
-		cfg.ProxyDNSCacheRaw = o.proxyDNSCacheTTL
-	}
-	if o.retryBackoff != "" {
-		cfg.RetryBackoffRaw = o.retryBackoff
-	}
-	if o.progressInterval != "" {
-		cfg.ProgressRaw = o.progressInterval
-	}
+	return nil
+}
+
+func applySchedulingFlags(cfg *config.Config, o checkOptions) {
+	override(&cfg.QueueSize, o.queueSize, o.queueSize != 0)
+	override(&cfg.PerTarget, o.perTarget, o.perTarget != 0)
+	override(&cfg.RateLimit, o.rate, o.rate != -1)
+	override(&cfg.Repeat, o.repeat, o.repeat != 0)
+	override(&cfg.MinSuccessRate, o.minSuccessRate, o.minSuccessRate != -1 && o.minSuccessRate != 0)
+	override(&cfg.TargetMatrix, o.targetMatrix, o.targetMatrix || o.explicit["target-matrix"])
+	override(&cfg.TargetQuorum, o.targetQuorum, o.targetQuorum >= 0)
+	override(&cfg.RotationSamples, o.rotationSamples, o.rotationSamples >= 0)
+	override(&cfg.Prescreen, o.prescreen, o.prescreen || o.explicit["prescreen"])
+	override(&cfg.PrescreenWorkers, o.prescreenWorkers, o.prescreenWorkers != 0)
+	override(&cfg.PrescreenRetries, o.prescreenRetries, o.prescreenRetries >= 0)
+	override(&cfg.SkipConnectRetry, o.noConnectRetry, o.noConnectRetry || o.explicit["no-connect-retry"])
+	override(&cfg.RetryPermanent, o.retryPermanent, o.retryPermanent || o.explicit["retry-permanent"])
+	override(&cfg.StopOnSuccess, o.stopOnSuccess, o.stopOnSuccess || o.explicit["stop-on-success"])
+}
+
+func applyResponseFlags(cfg *config.Config, o checkOptions) {
+	override(&cfg.MaxInputBytes, o.maxInputBytes, o.maxInputBytes > 0 || o.explicit["max-input-bytes"])
+	override(&cfg.MaxInputEntries, o.maxInputEntries, o.maxInputEntries > 0 || o.explicit["max-input-entries"])
+	override(&cfg.MaxResponseBytes, o.maxResponseBytes, o.maxResponseBytes > 0 || o.explicit["max-response-bytes"])
+	override(&cfg.IntelligenceBytes, o.intelligenceBytes, o.intelligenceBytes > 0 || o.explicit["intelligence-bytes"])
+	override(&cfg.MinResponseBytes, o.minResponseBytes, o.minResponseBytes > 0 || o.explicit["min-response-bytes"])
+	override(&cfg.MinThroughputKBPS, o.minThroughput, o.minThroughput > 0 || o.explicit["min-throughput-kbps"])
+	override(&cfg.RequireText, append([]string(nil), o.requireText...), len(o.requireText) > 0)
+	override(&cfg.RejectText, append([]string(nil), o.rejectText...), len(o.rejectText) > 0)
+	override(&cfg.ExpectJSON, append([]string(nil), o.expectJSON...), len(o.expectJSON) > 0)
+	override(&cfg.ExpectedBodySHA, strings.ToLower(strings.TrimSpace(o.expectedBodySHA)), o.expectedBodySHA != "" || o.explicit["expect-sha256"])
+	override(&cfg.ExpectCountries, []string(o.expectCountries), len(o.expectCountries) > 0)
+}
+
+func applyEvidenceFlags(cfg *config.Config, o checkOptions) {
+	override(&cfg.AnonymityBaseline, o.baselineIP, o.baselineIP != "" || o.explicit["baseline-ip"])
+	override(&cfg.MetadataFile, o.metadataFile, o.metadataFile != "" || o.explicit["metadata-file"])
+	override(&cfg.CABundle, o.caBundle, o.caBundle != "" || o.explicit["ca-bundle"])
+	override(&cfg.ProxyCABundle, o.proxyCABundle, o.proxyCABundle != "" || o.explicit["proxy-ca-bundle"])
+	override(&cfg.Preflight, strings.ToLower(o.preflight), o.preflight != "")
+	override(&cfg.DataDir, o.dataDir, o.dataDir != "")
+	override(&cfg.ProbeUDP, o.probeUDP, o.probeUDP || o.explicit["probe-udp"])
+	override(&cfg.TLSClassicalKEX, o.tlsClassicalKEX, o.tlsClassicalKEX || o.explicit["tls-classical-kex"])
+	override(&cfg.Save, o.save, o.save || o.explicit["save"])
+}
+
+func applyTimingFlags(cfg *config.Config, o checkOptions) {
+	override(&cfg.RotationRaw, o.rotationInterval, o.rotationInterval != "")
+	override(&cfg.ConnectTimeoutRaw, o.connectTimeout, o.connectTimeout != "")
+	override(&cfg.RequestTimeoutRaw, o.requestTimeout, o.requestTimeout != "")
+	override(&cfg.AutoProbeRaw, o.autoProbeTimeout, o.autoProbeTimeout != "")
+	override(&cfg.DNSCacheTTLRaw, o.dnsCacheTTL, o.dnsCacheTTL != "")
+	override(&cfg.ProxyDNSCacheRaw, o.proxyDNSCacheTTL, o.proxyDNSCacheTTL != "")
+	override(&cfg.RetryBackoffRaw, o.retryBackoff, o.retryBackoff != "")
+	override(&cfg.ProgressRaw, o.progressInterval, o.progressInterval != "")
+	override(&cfg.CanaryRaw, o.canaryInterval, o.canaryInterval != "")
+	override(&cfg.PrescreenRaw, o.prescreenTimeout, o.prescreenTimeout != "")
+}
+
+func applyPolicyFlags(cfg *config.Config, o checkOptions) {
+	override(&cfg.MaxRedirects, o.maxRedirects, o.maxRedirects >= 0)
+	override(&cfg.AllowPrivate, o.allowPrivate, o.allowPrivate || o.explicit["allow-private-targets"])
+	override(&cfg.AllowRemoteDNS, o.allowRemoteDNS, o.allowRemoteDNS || o.explicit["allow-remote-dns"])
+	override(&cfg.AllowPrivateProxy, o.allowPrivateProxies, o.allowPrivateProxies || o.explicit["allow-private-proxies"])
 	if len(o.targets) > 0 {
 		cfg.Targets = []string(o.targets)
 		cfg.TargetRules = nil
 		cfg.TargetLabels = nil
 	}
-	if o.dataDir != "" {
-		cfg.DataDir = o.dataDir
-	}
-	if o.maxRedirects >= 0 {
-		cfg.MaxRedirects = o.maxRedirects
-	}
-	if o.allowPrivate || o.explicit["allow-private-targets"] {
-		cfg.AllowPrivate = o.allowPrivate
-	}
-	if o.allowRemoteDNS || o.explicit["allow-remote-dns"] {
-		cfg.AllowRemoteDNS = o.allowRemoteDNS
-	}
-	if o.allowPrivateProxies || o.explicit["allow-private-proxies"] {
-		cfg.AllowPrivateProxy = o.allowPrivateProxies
-	}
-	if o.probeUDP || o.explicit["probe-udp"] {
-		cfg.ProbeUDP = o.probeUDP
-	}
-	if len(o.expectCountries) > 0 {
-		cfg.ExpectCountries = []string(o.expectCountries)
-	}
-	if o.canaryInterval != "" {
-		cfg.CanaryRaw = o.canaryInterval
-	}
-	if o.prescreen || o.explicit["prescreen"] {
-		cfg.Prescreen = o.prescreen
-	}
-	if o.prescreenWorkers != 0 {
-		cfg.PrescreenWorkers = o.prescreenWorkers
-	}
-	if o.prescreenRetries >= 0 {
-		cfg.PrescreenRetries = o.prescreenRetries
-	}
-	if o.prescreenTimeout != "" {
-		cfg.PrescreenRaw = o.prescreenTimeout
-	}
-	if o.noConnectRetry || o.explicit["no-connect-retry"] {
-		cfg.SkipConnectRetry = o.noConnectRetry
-	}
-	if o.tlsClassicalKEX || o.explicit["tls-classical-kex"] {
-		cfg.TLSClassicalKEX = o.tlsClassicalKEX
-	}
-	if o.retryPermanent || o.explicit["retry-permanent"] {
-		cfg.RetryPermanent = o.retryPermanent
-	}
-	if o.stopOnSuccess || o.explicit["stop-on-success"] {
-		cfg.StopOnSuccess = o.stopOnSuccess
-	}
-	if o.save || o.explicit["save"] {
-		cfg.Save = o.save
-	}
-	if err := cfg.ParseDurations(); err != nil {
-		return cfg, "", "", false, err
-	}
+}
+
+// allowedHosts builds the redirect allowlist. Explicit targets replace the
+// configured hosts, because those were approved for different destinations.
+func allowedHosts(cfg config.Config, o checkOptions) []string {
 	allowed := map[string]struct{}{}
 	if len(o.targets) == 0 {
-		for _, h := range cfg.AllowedHosts {
-			allowed[strings.ToLower(strings.TrimSuffix(h, "."))] = struct{}{}
+		for _, host := range cfg.AllowedHosts {
+			allowed[strings.ToLower(strings.TrimSuffix(host, "."))] = struct{}{}
 		}
 	}
-	for _, t := range cfg.Targets {
-		u, e := url.Parse(t)
-		if e == nil {
-			allowed[strings.ToLower(u.Hostname())] = struct{}{}
+	for _, target := range cfg.Targets {
+		if parsed, err := url.Parse(target); err == nil {
+			allowed[strings.ToLower(parsed.Hostname())] = struct{}{}
 		}
 	}
-	for _, h := range o.allowHosts {
-		allowed[strings.ToLower(strings.TrimSuffix(h, "."))] = struct{}{}
+	for _, host := range o.allowHosts {
+		allowed[strings.ToLower(strings.TrimSuffix(host, "."))] = struct{}{}
 	}
-	cfg.AllowedHosts = cfg.AllowedHosts[:0]
-	for h := range allowed {
-		cfg.AllowedHosts = append(cfg.AllowedHosts, h)
+	hosts := make([]string, 0, len(allowed))
+	for host := range allowed {
+		hosts = append(hosts, host)
 	}
-	sort.Strings(cfg.AllowedHosts)
-	if err := cfg.Validate(); err != nil {
-		return cfg, "", "", false, err
-	}
-	p, err := model.ParseProtocol(o.protocol)
+	sort.Strings(hosts)
+	return hosts
+}
+
+func (c CLI) outputSettings(o checkOptions) (model.Protocol, output.Format, bool, error) {
+	protocol, err := model.ParseProtocol(o.protocol)
 	if err != nil {
-		return cfg, "", "", false, err
+		return "", "", false, err
 	}
-	f, err := output.ParseFormat(o.format)
+	format, err := output.ParseFormat(o.format)
 	if err != nil {
-		return cfg, "", "", false, err
-	}
-	color := o.color == "always" || (o.color == "auto" && c.IsTerminal && os.Getenv("NO_COLOR") == "")
-	if o.plain {
-		color = false
+		return "", "", false, err
 	}
 	if o.color != "auto" && o.color != "always" && o.color != "never" {
-		return cfg, "", "", false, errors.New("color must be auto, always, or never")
+		return "", "", false, errors.New("color must be auto, always, or never")
 	}
-	if f != output.FormatTable {
-		color = false
-	}
-	if o.outputStatus == "" {
-		o.outputStatus = "all"
-	}
-	if o.outputStatus != "all" {
-		if _, ok := map[string]bool{"ok": true, "failed": true, "timeout": true, "auth_failed": true, "policy_blocked": true, "invalid": true, "inconclusive": true, "unreliable": true, "interrupted": true}[o.outputStatus]; !ok {
-			return cfg, "", "", false, errors.New("output-status is invalid")
+	color := !o.plain && format == output.FormatTable && (o.color == "always" || (o.color == "auto" && c.IsTerminal && os.Getenv("NO_COLOR") == ""))
+	if o.outputStatus != "" && o.outputStatus != "all" {
+		if _, err := parseStatusList(o.outputStatus); err != nil {
+			return "", "", false, errors.New("output-status is invalid")
 		}
 	}
 	if len(o.label) > 64 || strings.IndexFunc(o.label, unicode.IsControl) >= 0 {
-		return cfg, "", "", false, errors.New("label must contain at most 64 safe characters")
+		return "", "", false, errors.New("label must contain at most 64 safe characters")
 	}
-	return cfg, p, f, color, nil
+	return protocol, format, color, nil
 }
 
 func applyProfile(cfg *config.Config, name string) error {

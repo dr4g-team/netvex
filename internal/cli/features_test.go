@@ -6,10 +6,12 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/drag-team/netvex/internal/config"
 	historypkg "github.com/drag-team/netvex/internal/history"
 	"github.com/drag-team/netvex/internal/model"
 )
@@ -301,5 +303,60 @@ func TestMaxLatencyFiltersSingleMeasurementRuns(t *testing.T) {
 	slow := model.Result{Status: model.StatusOK, Successes: 1, Score: model.Score{MedianMS: 900}}
 	if matchResult(slow, resultFilter{maxLatency: 100}) {
 		t.Fatal("slow proxy passed the latency filter")
+	}
+}
+
+func TestFlagsOverrideConfigurationAndProfiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"concurrency":12,"allow_remote_dns":true,"repeat":4,"targets":["https://configured.test/"],"allowed_target_hosts":["configured.test","extra.test"]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	load := func(o checkOptions) config.Config {
+		t.Helper()
+		o.configPath, o.protocol, o.format, o.color = path, "http", "table", "auto"
+		o.rate, o.minSuccessRate, o.maxInputBytes, o.maxInputEntries, o.maxResponseBytes, o.intelligenceBytes, o.minResponseBytes, o.minThroughput = -1, -1, -1, -1, -1, -1, -1, -1
+		o.targetQuorum, o.rotationSamples, o.maxRedirects, o.prescreenRetries = -1, -1, -1, -1
+		if o.explicit == nil {
+			o.explicit = map[string]bool{}
+		}
+		cfg, _, _, _, err := CLI{}.loadCheck(o)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cfg
+	}
+	cfg := load(checkOptions{})
+	if cfg.Concurrency != 12 || cfg.Repeat != 4 || !cfg.AllowRemoteDNS || !slices.Contains(cfg.AllowedHosts, "extra.test") {
+		t.Fatalf("configuration lost: %+v", cfg)
+	}
+	cfg = load(checkOptions{profile: "fast"})
+	if cfg.Repeat != 1 || !cfg.Prescreen {
+		t.Fatalf("profile not applied: %+v", cfg)
+	}
+	cfg = load(checkOptions{profile: "fast", repeat: 3, concurrency: "9", prescreenRetries: 2})
+	if cfg.Repeat != 3 || cfg.Concurrency != 9 {
+		t.Fatalf("flags did not win: %+v", cfg)
+	}
+	cfg = load(checkOptions{explicit: map[string]bool{"allow-remote-dns": true}})
+	if cfg.AllowRemoteDNS {
+		t.Fatal("an explicit false flag must disable a configured boolean")
+	}
+	cfg = load(checkOptions{targets: stringsFlag{"https://flag.test/"}})
+	if slices.Contains(cfg.AllowedHosts, "extra.test") || !slices.Contains(cfg.AllowedHosts, "flag.test") || len(cfg.Targets) != 1 {
+		t.Fatalf("explicit targets must replace configured hosts: %+v", cfg.AllowedHosts)
+	}
+}
+
+func TestOutputStatusAcceptsLists(t *testing.T) {
+	proxy, target := connectProxy(t), echoTarget(t)
+	args := []string{"check", "--repeat", "1", "--format", "txt", "--allow-private-targets", "--allow-private-proxies", "--target", target}
+	if code, out, diag := run(append(args, "--output-status", "failed,ok"), proxy+"\n"); code != ExitOK || !strings.Contains(out, proxy) {
+		t.Fatalf("code=%d out=%q diag=%q", code, out, diag)
+	}
+	if code, out, _ := run(append(args, "--output-status", "failed"), proxy+"\n"); code != ExitOK || strings.Contains(out, proxy) {
+		t.Fatalf("filtered status printed: code=%d out=%q", code, out)
+	}
+	if code, _, _ := run(append(args, "--output-status", "nope"), proxy+"\n"); code != ExitUsage {
+		t.Fatalf("code=%d", code)
 	}
 }
