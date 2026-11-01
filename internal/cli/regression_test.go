@@ -16,8 +16,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drag-team/netvex/internal/model"
-	"github.com/drag-team/netvex/internal/store"
+	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/dr4g-team/netvex/internal/store"
 )
 
 // connectProxy is a loopback CONNECT proxy fixture that serves until the test ends.

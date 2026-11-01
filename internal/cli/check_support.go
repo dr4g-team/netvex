@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/drag-team/netvex/internal/store"
+	"github.com/dr4g-team/netvex/internal/store"
 )
 
 // identityKey loads the secret behind credential-scoped result IDs on first use,

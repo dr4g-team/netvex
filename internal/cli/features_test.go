@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/drag-team/netvex/internal/config"
-	historypkg "github.com/drag-team/netvex/internal/history"
-	"github.com/drag-team/netvex/internal/model"
+	"github.com/dr4g-team/netvex/internal/config"
+	historypkg "github.com/dr4g-team/netvex/internal/history"
+	"github.com/dr4g-team/netvex/internal/model"
 )
 
 func checkArgs(target string, extra ...string) []string {

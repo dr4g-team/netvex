@@ -11,10 +11,10 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/drag-team/netvex/internal/config"
-	"github.com/drag-team/netvex/internal/model"
-	"github.com/drag-team/netvex/internal/output"
-	"github.com/drag-team/netvex/internal/scenario"
+	"github.com/dr4g-team/netvex/internal/config"
+	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/dr4g-team/netvex/internal/output"
+	"github.com/dr4g-team/netvex/internal/scenario"
 )
 
 type checkOptions struct {

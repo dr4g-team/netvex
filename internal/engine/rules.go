@@ -8,9 +8,9 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/drag-team/netvex/internal/config"
-	"github.com/drag-team/netvex/internal/model"
-	"github.com/drag-team/netvex/internal/protocol"
+	"github.com/dr4g-team/netvex/internal/config"
+	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/dr4g-team/netvex/internal/protocol"
 )
 
 type jsonExpectation struct {

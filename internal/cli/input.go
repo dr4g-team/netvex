@@ -10,9 +10,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/drag-team/netvex/internal/config"
-	inputpkg "github.com/drag-team/netvex/internal/input"
-	"github.com/drag-team/netvex/internal/model"
+	"github.com/dr4g-team/netvex/internal/config"
+	inputpkg "github.com/dr4g-team/netvex/internal/input"
+	"github.com/dr4g-team/netvex/internal/model"
 )
 
 // inspect feeds the proxy through standard input rather than a temporary file,

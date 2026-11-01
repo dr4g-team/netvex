@@ -10,8 +10,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/drag-team/netvex/internal/buildinfo"
-	schemapkg "github.com/drag-team/netvex/internal/schema"
+	"github.com/dr4g-team/netvex/internal/buildinfo"
+	schemapkg "github.com/dr4g-team/netvex/internal/schema"
 )
 
 const (

@@ -12,15 +12,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/drag-team/netvex/internal/config"
-	"github.com/drag-team/netvex/internal/engine"
-	inputpkg "github.com/drag-team/netvex/internal/input"
-	metadatapkg "github.com/drag-team/netvex/internal/metadata"
-	"github.com/drag-team/netvex/internal/metrics"
-	"github.com/drag-team/netvex/internal/model"
-	"github.com/drag-team/netvex/internal/output"
-	qualitypkg "github.com/drag-team/netvex/internal/quality"
-	"github.com/drag-team/netvex/internal/store"
+	"github.com/dr4g-team/netvex/internal/config"
+	"github.com/dr4g-team/netvex/internal/engine"
+	inputpkg "github.com/dr4g-team/netvex/internal/input"
+	metadatapkg "github.com/dr4g-team/netvex/internal/metadata"
+	"github.com/dr4g-team/netvex/internal/metrics"
+	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/dr4g-team/netvex/internal/output"
+	qualitypkg "github.com/dr4g-team/netvex/internal/quality"
+	"github.com/dr4g-team/netvex/internal/store"
 )
 
 // checkSession holds one validation run. check() reads as the sequence of steps;

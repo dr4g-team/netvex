@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/drag-team/netvex/internal/model"
+	"github.com/dr4g-team/netvex/internal/model"
 )
 
 type immediateProcessor struct{}

@@ -8,7 +8,7 @@ import (
 	"net/url"
 	"testing"
 
-	"github.com/drag-team/netvex/internal/config"
+	"github.com/dr4g-team/netvex/internal/config"
 )
 
 func TestPreflightUsesPinnedApprovedTarget(t *testing.T) {

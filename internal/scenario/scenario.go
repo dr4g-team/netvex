@@ -9,7 +9,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/drag-team/netvex/internal/config"
+	"github.com/dr4g-team/netvex/internal/config"
 )
 
 const MaxBytes = 1 << 20

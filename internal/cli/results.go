@@ -10,10 +10,10 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/drag-team/netvex/internal/config"
-	"github.com/drag-team/netvex/internal/model"
-	"github.com/drag-team/netvex/internal/output"
-	"github.com/drag-team/netvex/internal/store"
+	"github.com/dr4g-team/netvex/internal/config"
+	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/dr4g-team/netvex/internal/output"
+	"github.com/dr4g-team/netvex/internal/store"
 )
 
 type resultFilter struct {

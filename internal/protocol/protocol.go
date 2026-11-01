@@ -18,9 +18,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/drag-team/netvex/internal/buildinfo"
-	"github.com/drag-team/netvex/internal/model"
-	"github.com/drag-team/netvex/internal/policy"
+	"github.com/dr4g-team/netvex/internal/buildinfo"
+	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/dr4g-team/netvex/internal/policy"
 )
 
 type Error struct {

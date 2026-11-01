@@ -11,8 +11,8 @@ import (
 	"strings"
 	"unicode"
 
-	inputpkg "github.com/drag-team/netvex/internal/input"
-	"github.com/drag-team/netvex/internal/model"
+	inputpkg "github.com/dr4g-team/netvex/internal/input"
+	"github.com/dr4g-team/netvex/internal/model"
 )
 
 const (

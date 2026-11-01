@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/drag-team/netvex/internal/config"
+	"github.com/dr4g-team/netvex/internal/config"
 )
 
 func TestConfigureCABundlesRejectsInvalidPEM(t *testing.T) {

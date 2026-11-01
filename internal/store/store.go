@@ -18,8 +18,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
-	"github.com/drag-team/netvex/internal/fsx"
-	"github.com/drag-team/netvex/internal/model"
+	"github.com/dr4g-team/netvex/internal/fsx"
+	"github.com/dr4g-team/netvex/internal/model"
 )
 
 type RunWriter struct {

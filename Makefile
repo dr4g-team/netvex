@@ -3,7 +3,7 @@ PREFIX ?= $(HOME)/.local
 VERSION ?= $(shell tr -d '\n' < VERSION)
 COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || printf unknown)
 BUILD_DATE ?= $(shell git show -s --format=%cI HEAD 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
-MODULE := github.com/drag-team/netvex
+MODULE := github.com/dr4g-team/netvex
 GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.9.0
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
 FUZZTIME ?= 30s

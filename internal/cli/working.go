@@ -12,7 +12,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/drag-team/netvex/internal/model"
+	"github.com/dr4g-team/netvex/internal/model"
 )
 
 var (

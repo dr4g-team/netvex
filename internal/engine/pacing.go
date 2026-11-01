@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/drag-team/netvex/internal/model"
+	"github.com/dr4g-team/netvex/internal/model"
 )
 
 func (c *Checker) waitInterval(ctx context.Context) bool {

@@ -5,7 +5,7 @@ import (
 	"net/netip"
 	"sort"
 
-	"github.com/drag-team/netvex/internal/model"
+	"github.com/dr4g-team/netvex/internal/model"
 )
 
 func TargetResults(observations []model.Observation, minSuccessRate float64, expectedPerTarget int, expectedTargets ...string) []model.TargetResult {
