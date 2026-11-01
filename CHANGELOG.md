@@ -30,6 +30,12 @@ All notable changes to NetVex are documented in this file. The project uses
   detection, improving compatibility with Windows and spreadsheet exports.
 - Hostile structured-input fuzz coverage across CSV, JSON, JSONL, automatic
   detection, deduplication, rejection diagnostics, and UTF-8 BOM handling.
+- Streaming JSON-array result output alongside JSONL, CSV, TXT, and terminal tables.
+- Transparent bzip2 proxy-dataset input using the Go standard library, including
+  nested format detection for names such as `proxies.csv.bz2`.
+- Atomic aggregate Prometheus textfile metrics for completed checks and
+  Prometheus exposition from saved summaries via `stats --prometheus`.
+- A versioned `capabilities --json` document for deployment and wrapper feature detection.
 - Streaming multi-pattern response matching for ASCII content assertions,
   avoiding full-body retention and a second lowercase copy while preserving a
   Unicode-compatible bounded path.

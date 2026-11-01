@@ -3,6 +3,7 @@ package input
 import (
 	"bytes"
 	"compress/gzip"
+	"encoding/hex"
 	"io"
 	"net/url"
 	"strconv"
@@ -281,6 +282,28 @@ func TestGzipAutoFormatAndAggregateLimit(t *testing.T) {
 	}
 	if err := q.EmitSource(strings.NewReader("b.test:80\n"), FormatText, "b.txt", func(model.Proxy) error { return nil }, nil); err == nil || !strings.Contains(err.Error(), "aggregate limit") {
 		t.Fatalf("err=%v", err)
+	}
+}
+
+func TestBzip2AutoFormat(t *testing.T) {
+	payload, err := hex.DecodeString("425a6839314159265359d4a74ce900000559800010000540400240dc60200031000008878a0da2078bdc0454f9a25bcaa8a17f177245385090d4a74ce9")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader, closer, err := MaybeDecompress(bytes.NewReader(payload))
+	if err != nil || closer != nil {
+		t.Fatalf("closer=%v err=%v", closer, err)
+	}
+	p := New(Options{Format: FormatAuto, DefaultProtocol: model.ProtocolHTTP, MaxBytes: 1000})
+	var got []model.Proxy
+	if err := p.EmitSource(reader, FormatAuto, "list.csv.bz2", func(proxy model.Proxy) error {
+		got = append(got, proxy)
+		return nil
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Host != "proxy.test" || got[0].Port != 8080 {
+		t.Fatalf("got=%+v", got)
 	}
 }
 

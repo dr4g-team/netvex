@@ -21,7 +21,7 @@ daemon, telemetry, or root requirement.
 - Bounded workers, queues, target concurrency, request rate, response size, and retries.
 - Bounded fallback across policy-approved destination addresses to reduce
   dual-stack and multi-origin false negatives.
-- Streaming TXT, CSV, JSON, JSONL, NDJSON, and gzip input with exact optional deduplication.
+- Streaming TXT, CSV, JSON, JSONL, NDJSON, gzip, and bzip2 input with exact optional deduplication.
 - Repeat measurements, reliability thresholds, latency distributions, and explainable scores.
 - Multi-target scenarios with per-target assertions, quorum qualification, and direct preflight.
 - Exit-IP rotation, sticky-session, pool-diversity, and cross-run stability analysis.
@@ -30,7 +30,7 @@ daemon, telemetry, or root requirement.
 - Resumable checkpoints, deterministic dataset sharding, and result-run merging.
 - JSON quality gates and JUnit XML reports for CI policy enforcement.
 - Optional offline country, city, ASN, organization, and network-type metadata.
-- JSONL, CSV, TXT, and human-readable output with clean stdout/stderr separation.
+- JSON arrays, JSONL, CSV, TXT, and human-readable output with clean stdout/stderr separation.
 - Atomic credential-bearing working lists and optional local run history.
 - TTY-aware color, plain output, shell completion, signal handling, and stable exit codes.
 - Single static Go binary with no runtime dependencies on Linux, macOS, Windows, and FreeBSD.
@@ -107,6 +107,7 @@ netvex check --working-output working.txt --keep-partial proxies.txt
 netvex check --scenario examples/scenario.json --policy examples/quality-policy.json --junit-output netvex.xml proxies.txt
 netvex check --format txt --output-status ok proxies.txt > working-redacted.txt
 netvex check --quiet --summary-output summary.json --require-count 10 proxies.txt
+netvex check --quiet --metrics-output netvex.prom proxies.txt
 netvex check --reject-text "access denied" --reject-text "cf-turnstile" proxies.txt
 netvex check --expect-json status=ok --expect-json data.region=us-east proxies.txt
 netvex check --target https://download.example/payload.bin --min-response-bytes 262144 --min-throughput-kbps 500 proxies.txt
@@ -126,6 +127,7 @@ netvex runs --limit 20
 netvex runs prune --keep 50
 netvex runs prune --keep 50 --execute
 netvex doctor
+netvex capabilities --json
 netvex bench --count 100000 --concurrency 128
 ```
 
@@ -155,10 +157,10 @@ JSON accepts a streamed array of URI strings or objects containing `proxy`, or
 `protocol`, `host`, and `port`. JSONL and NDJSON accept the same values one per
 line. UTF-8 BOM prefixes are accepted in text, CSV, JSON, and JSONL inputs.
 
-Gzip input is detected by its magic bytes on files and standard input. Automatic
-format detection understands names such as `proxies.csv.gz` and
-`proxies.jsonl.gz`; explicit `--input-format` remains available for streams
-without a useful filename. With no input paths NetVex reads standard input;
+Gzip and bzip2 input are detected by stream magic bytes on files and standard
+input. Automatic format detection understands names such as `proxies.csv.gz`,
+`proxies.csv.bz2`, and `proxies.jsonl.gz`; explicit `--input-format` remains
+available for streams without a useful filename. With no input paths NetVex reads standard input;
 `-` can also select standard input explicitly among file arguments.
 
 URI credentials must be percent-encoded where necessary. Supply credentials in
@@ -172,7 +174,7 @@ not representable in that form; use an authenticated URI with percent-encoding
 instead. Bracketed IPv6 must use URI or `host:port` syntax.
 
 Input is capped at 256 MiB and 1,000,000 records by default across the complete invocation and
-individual text records at 1 MiB. For gzip sources, the aggregate cap applies to
+individual text records at 1 MiB. For compressed sources, the aggregate cap applies to
 decompressed bytes. Parsing, validation, persistence, and ordinary output are streamed.
 `--no-deduplicate` bypasses fingerprint calculation and avoids retaining endpoint
 hashes when constant parser memory is more important than duplicate suppression.

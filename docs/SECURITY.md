@@ -34,7 +34,7 @@ Default safeguards:
   Unicode content assertions;
 - a 512 MiB worst-case concurrent response-capture budget enforced before any
   network operation;
-- one aggregate decompressed-byte budget across all plain and gzip input sources;
+- one aggregate decompressed-byte budget across all plain, gzip, and bzip2 input sources;
 - at most four locally resolved, fully policy-approved target addresses are
   considered for destination-specific fallback within one attempt deadline;
 - CI and release actions are pinned to audited immutable revisions, and source
@@ -48,6 +48,8 @@ Default safeguards:
 - forwarding evidence stores names but not potentially identifying header values;
 - history, checkpoints, sharded credential lists, reports, and generated configuration use owner-only POSIX permissions;
 - standalone summaries and credential-bearing exports use atomic owner-only POSIX files;
+- Prometheus textfile reports contain aggregate metrics with fixed labels and
+  exclude proxy, target, credential, and operator-supplied label values;
 - generated configuration is synchronized and atomically replaced;
 - input/output path aliases are compared after symbolic-link resolution;
 - no shell evaluation, dynamic code loading, privileged operation, or service

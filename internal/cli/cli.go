@@ -94,6 +94,8 @@ func (c CLI) Run(args []string) int {
 		return c.bench(args[1:])
 	case "completion":
 		return c.completion(args[1:])
+	case "capabilities":
+		return c.capabilities(args[1:])
 	default:
 		fmt.Fprintf(c.Stderr, "netvex: unknown command %q; run 'netvex help'\n", args[0])
 		return ExitUsage
@@ -111,7 +113,7 @@ Commands:
   import     normalize and validate input without network access
   results    filter a saved run
   runs       list saved validation runs
-  export     export a saved run as JSONL, CSV, or TXT
+  export     export a saved run as JSON, JSONL, CSV, or TXT
   stats      summarize a saved run
   history    analyze stability across saved runs
   pool       analyze exit, subnet, ASN, and country diversity
@@ -121,6 +123,7 @@ Commands:
   config     show, validate, or initialize configuration
   doctor     diagnose the local runtime and optional network resolution
   bench      run a controlled scheduler benchmark
+  capabilities show machine-readable protocols, formats, and safeguards
   completion generate shell completion for bash, zsh, or fish
   version    show build information
 
@@ -128,6 +131,64 @@ Run 'netvex <command> --help' for command options.
 Exit codes: 0 completed, 2 usage/config, 3 operational, 4 no valid input,
 5 validation threshold or quality policy not met, 130 interrupted.
 `)
+	return ExitOK
+}
+
+type capabilityDocument struct {
+	SchemaVersion    int      `json:"schema_version"`
+	Product          string   `json:"product"`
+	Version          string   `json:"version"`
+	Protocols        []string `json:"protocols"`
+	ProxyAuth        []string `json:"proxy_authentication"`
+	InputFormats     []string `json:"input_formats"`
+	InputCompression []string `json:"input_compression"`
+	OutputFormats    []string `json:"output_formats"`
+	Reports          []string `json:"reports"`
+	Safeguards       []string `json:"safeguards"`
+	Platforms        []string `json:"build_platforms"`
+}
+
+func currentCapabilities() capabilityDocument {
+	return capabilityDocument{
+		SchemaVersion:    1,
+		Product:          "netvex",
+		Version:          buildinfo.Version,
+		Protocols:        []string{"http", "https", "socks4", "socks4a", "socks5", "auto"},
+		ProxyAuth:        []string{"http_basic", "socks4_userid", "socks5_username_password"},
+		InputFormats:     []string{"text", "csv", "json", "jsonl", "auto"},
+		InputCompression: []string{"gzip", "bzip2"},
+		OutputFormats:    []string{"table", "json", "jsonl", "csv", "txt"},
+		Reports:          []string{"summary_json", "prometheus_textfile", "junit_xml"},
+		Safeguards:       []string{"bounded_concurrency", "bounded_input", "bounded_response", "credential_redaction", "destination_allowlist", "dns_pinning", "safe_redirects", "tls_verification"},
+		Platforms:        []string{"linux", "darwin", "windows", "freebsd", "openbsd", "netbsd", "dragonfly", "illumos", "solaris", "aix"},
+	}
+}
+
+func (c CLI) capabilities(args []string) int {
+	fs, buf := c.newFlagSet("capabilities")
+	jsonOutput := fs.Bool("json", false, "emit a JSON capability document")
+	if ok, code := c.parseFlags(fs, buf, args); !ok {
+		return code
+	}
+	document := currentCapabilities()
+	if *jsonOutput {
+		encoder := json.NewEncoder(c.Stdout)
+		encoder.SetIndent("", "  ")
+		if err := encoder.Encode(document); err != nil {
+			if errors.Is(err, syscall.EPIPE) {
+				return ExitOK
+			}
+			fmt.Fprintln(c.Stderr, err)
+			return ExitOperational
+		}
+		return ExitOK
+	}
+	fmt.Fprintf(c.Stdout, "protocols=%s\n", strings.Join(document.Protocols, ","))
+	fmt.Fprintf(c.Stdout, "proxy_authentication=%s\n", strings.Join(document.ProxyAuth, ","))
+	fmt.Fprintf(c.Stdout, "input_formats=%s compression=%s\n", strings.Join(document.InputFormats, ","), strings.Join(document.InputCompression, ","))
+	fmt.Fprintf(c.Stdout, "output_formats=%s reports=%s\n", strings.Join(document.OutputFormats, ","), strings.Join(document.Reports, ","))
+	fmt.Fprintf(c.Stdout, "safeguards=%s\n", strings.Join(document.Safeguards, ","))
+	fmt.Fprintf(c.Stdout, "build_platforms=%s\n", strings.Join(document.Platforms, ","))
 	return ExitOK
 }
 
@@ -159,6 +220,7 @@ type checkOptions struct {
 	plain                                                       bool
 	workingOutput                                               string
 	summaryOutput                                               string
+	metricsOutput                                               string
 	checkpointOutput, resumeCheckpoint                          string
 	qualityPolicy, junitOutput                                  string
 	checkpointSync                                              int
@@ -193,7 +255,7 @@ func (c CLI) parseFlags(fs *flag.FlagSet, buf *bytesBuffer, args []string) (bool
 func (c CLI) addCheckFlags(fs *flag.FlagSet, o *checkOptions) {
 	fs.StringVar(&o.configPath, "config", "", "JSON configuration file")
 	fs.StringVar(&o.profile, "profile", "", "execution profile: fast, balanced, thorough")
-	fs.StringVar(&o.format, "format", "table", "output: table, jsonl, csv, txt")
+	fs.StringVar(&o.format, "format", "table", "output: table, json, jsonl, csv, txt")
 	fs.StringVar(&o.inputFormat, "input-format", "auto", "input: auto, text, csv, json, jsonl")
 	fs.StringVar(&o.protocol, "protocol", "http", "default protocol: http, https, socks4, socks4a, socks5, auto")
 	fs.StringVar(&o.color, "color", "auto", "color: auto, always, never")
@@ -244,12 +306,13 @@ func (c CLI) addCheckFlags(fs *flag.FlagSet, o *checkOptions) {
 	fs.StringVar(&o.workingOutput, "working-output", "", "write validated proxies with credentials to a mode-0600 file")
 	fs.BoolVar(&o.keepPartial, "keep-partial", false, "atomically publish validated working output when interrupted")
 	fs.StringVar(&o.summaryOutput, "summary-output", "", "atomically write the run summary as JSON")
+	fs.StringVar(&o.metricsOutput, "metrics-output", "", "atomically write aggregate Prometheus textfile metrics")
 	fs.StringVar(&o.checkpointOutput, "checkpoint", "", "append completed results to a resumable JSONL checkpoint")
 	fs.StringVar(&o.resumeCheckpoint, "resume", "", "resume and append an existing checkpoint JSONL file")
 	fs.IntVar(&o.checkpointSync, "checkpoint-sync", 100, "synchronize a checkpoint after this many results")
 	fs.StringVar(&o.qualityPolicy, "policy", "", "JSON quality-gate policy evaluated after the run")
 	fs.StringVar(&o.junitOutput, "junit-output", "", "atomically write a JUnit XML quality report")
-	fs.BoolVar(&o.forceWorking, "force", false, "replace an existing working or summary output file")
+	fs.BoolVar(&o.forceWorking, "force", false, "replace existing output and report files")
 	fs.BoolVar(&o.save, "save", false, "persist run results locally")
 	fs.StringVar(&o.dataDir, "data-dir", "", "history directory")
 	fs.IntVar(&o.maxRedirects, "max-redirects", -1, "safe redirects to follow (0..10)")
@@ -550,6 +613,10 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		fmt.Fprintln(c.Stderr, "keep-partial requires working-output")
 		return ExitUsage
 	}
+	if o.metricsOutput == "-" {
+		fmt.Fprintln(c.Stderr, "metrics-output requires a file path; use stats --prometheus for stdout")
+		return ExitUsage
+	}
 	var qualityPolicy *qualitypkg.Policy
 	if o.qualityPolicy != "" {
 		loaded, loadErr := qualitypkg.Load(o.qualityPolicy)
@@ -667,7 +734,7 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 				return ExitUsage
 			}
 		}
-		for _, outputPath := range []string{o.workingOutput, o.summaryOutput, o.junitOutput} {
+		for _, outputPath := range []string{o.workingOutput, o.summaryOutput, o.metricsOutput, o.junitOutput} {
 			if outputPath == "" {
 				continue
 			}
@@ -677,15 +744,16 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 				return ExitUsage
 			}
 			if same {
-				fmt.Fprintln(c.Stderr, "checkpoint, working output, and summary output must use different files")
+				fmt.Fprintln(c.Stderr, "checkpoint and report outputs must use different files")
 				return ExitUsage
 			}
 		}
 	}
 	var working *secureOutput
 	var summaryOutput *secureOutput
+	var metricsOutput *secureOutput
 	var junitOutput *secureOutput
-	outputPaths := []string{o.workingOutput, o.summaryOutput, o.junitOutput, checkpointPath}
+	outputPaths := []string{o.workingOutput, o.summaryOutput, o.metricsOutput, o.junitOutput, checkpointPath}
 	for i, left := range outputPaths {
 		if left == "" {
 			continue
@@ -700,7 +768,7 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 				return ExitUsage
 			}
 			if same {
-				fmt.Fprintln(c.Stderr, "checkpoint, working, summary, and JUnit outputs must use different files")
+				fmt.Fprintln(c.Stderr, "checkpoint and report outputs must use different files")
 				return ExitUsage
 			}
 		}
@@ -767,6 +835,28 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 			return ExitOperational
 		}
 		defer summaryOutput.Abort()
+	}
+	if o.metricsOutput != "" {
+		for _, name := range files {
+			if name == "-" {
+				continue
+			}
+			same, sameErr := samePath(name, o.metricsOutput)
+			if sameErr != nil {
+				fmt.Fprintln(c.Stderr, "metrics output error:", sameErr)
+				return ExitUsage
+			}
+			if same {
+				fmt.Fprintln(c.Stderr, "metrics output must not overwrite an input file")
+				return ExitUsage
+			}
+		}
+		metricsOutput, err = openSecureOutput(o.metricsOutput, o.forceWorking)
+		if err != nil {
+			fmt.Fprintln(c.Stderr, "metrics output error:", err)
+			return ExitOperational
+		}
+		defer metricsOutput.Abort()
 	}
 	if o.junitOutput != "" {
 		for _, name := range files {
@@ -1067,6 +1157,17 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 			return ExitOperational
 		}
 		fmt.Fprintf(c.Stderr, "saved run summary to %q\n", o.summaryOutput)
+	}
+	if metricsOutput != nil {
+		if err := output.WritePrometheusSummary(metricsOutput, summary); err != nil {
+			fmt.Fprintln(c.Stderr, "metrics output error:", err)
+			return ExitOperational
+		}
+		if err := metricsOutput.Commit(); err != nil {
+			fmt.Fprintln(c.Stderr, "metrics output error:", err)
+			return ExitOperational
+		}
+		fmt.Fprintf(c.Stderr, "saved aggregate metrics to %q\n", o.metricsOutput)
 	}
 	if working != nil {
 		if err := working.Commit(); err != nil {
@@ -1750,7 +1851,7 @@ func (c CLI) export(args []string) int {
 	fs, buf := c.newFlagSet("export")
 	run := fs.String("run", "latest", "run ID or path")
 	data := fs.String("data-dir", config.Defaults().DataDir, "history directory")
-	format := fs.String("format", "jsonl", "jsonl, csv, txt")
+	format := fs.String("format", "jsonl", "json, jsonl, csv, txt")
 	out := fs.String("output", "-", "output file or -")
 	status := fs.String("status", "", "status filter")
 	proto := fs.String("protocol", "", "protocol filter")
@@ -1833,9 +1934,18 @@ func (c CLI) stats(args []string) int {
 	run := fs.String("run", "latest", "run ID or path")
 	data := fs.String("data-dir", config.Defaults().DataDir, "history directory")
 	jsonOut := fs.Bool("json", false, "JSON output")
+	prometheusOut := fs.Bool("prometheus", false, "Prometheus text exposition output")
 	compare := fs.String("compare", "", "baseline run ID or path")
 	if ok, code := c.parseFlags(fs, buf, args); !ok {
 		return code
+	}
+	if *jsonOut && *prometheusOut {
+		fmt.Fprintln(c.Stderr, "json and prometheus output are mutually exclusive")
+		return ExitUsage
+	}
+	if *prometheusOut && *compare != "" {
+		fmt.Fprintln(c.Stderr, "prometheus output does not support run comparison")
+		return ExitUsage
 	}
 	path, err := store.ResolveRun(*data, *run)
 	if err != nil {
@@ -1864,6 +1974,16 @@ func (c CLI) stats(args []string) int {
 			fmt.Fprintln(c.Stdout, string(b))
 		} else {
 			fmt.Fprintf(c.Stdout, "current=%s baseline=%s ok_delta=%d unreliable_delta=%d failed_delta=%d inconclusive_delta=%d rate_delta=%+.1f/s p50_delta=%+.0fms p95_delta=%+.0fms p99_delta=%+.0fms\n", s.RunID, base.RunID, s.Successful-base.Successful, s.Unreliable-base.Unreliable, s.Failed-base.Failed, s.Inconclusive-base.Inconclusive, s.RatePerSec-base.RatePerSec, s.LatencyP50MS-base.LatencyP50MS, s.LatencyP95MS-base.LatencyP95MS, s.LatencyP99MS-base.LatencyP99MS)
+		}
+		return ExitOK
+	}
+	if *prometheusOut {
+		if err := output.WritePrometheusSummary(c.Stdout, s); err != nil {
+			if errors.Is(err, syscall.EPIPE) {
+				return ExitOK
+			}
+			fmt.Fprintln(c.Stderr, err)
+			return ExitOperational
 		}
 		return ExitOK
 	}
@@ -2137,7 +2257,7 @@ func (c CLI) completion(args []string) int {
 		fmt.Fprintln(c.Stderr, "usage: netvex completion bash|zsh|fish")
 		return ExitUsage
 	}
-	commands := "check inspect import results runs export stats history pool shard merge explore config doctor bench completion version help"
+	commands := "check inspect import results runs export stats history pool shard merge explore config doctor bench capabilities completion version help"
 	fs, _ := c.newFlagSet("completion-check")
 	var options checkOptions
 	c.addCheckFlags(fs, &options)

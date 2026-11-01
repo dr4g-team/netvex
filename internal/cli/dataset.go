@@ -180,7 +180,7 @@ func (c CLI) merge(args []string) int {
 	fs, buf := c.newFlagSet("merge")
 	dataDir := fs.String("data-dir", config.Defaults().DataDir, "history directory used for run IDs")
 	strategy := fs.String("strategy", "latest", "selection: latest or best")
-	formatText := fs.String("format", "jsonl", "output: jsonl, csv, txt, table")
+	formatText := fs.String("format", "jsonl", "output: json, jsonl, csv, txt, table")
 	outputPath := fs.String("output", "-", "output path or -")
 	maxLoad := fs.Int("max-load", 1_000_000, "maximum input records")
 	force := fs.Bool("force", false, "replace an existing output file")

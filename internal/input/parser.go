@@ -3,6 +3,7 @@ package input
 import (
 	"bufio"
 	"bytes"
+	"compress/bzip2"
 	"compress/gzip"
 	"encoding/binary"
 	"encoding/csv"
@@ -293,8 +294,11 @@ func (p *Parser) EmitSource(r io.Reader, format Format, source string, emit func
 
 func detectFormat(source string, r io.Reader) (Format, io.Reader) {
 	lowerSource := strings.ToLower(source)
-	if strings.HasSuffix(lowerSource, ".gz") {
-		lowerSource = strings.TrimSuffix(lowerSource, ".gz")
+	for _, suffix := range []string{".gz", ".bz2"} {
+		if strings.HasSuffix(lowerSource, suffix) {
+			lowerSource = strings.TrimSuffix(lowerSource, suffix)
+			break
+		}
 	}
 	switch filepath.Ext(lowerSource) {
 	case ".csv":
@@ -327,13 +331,16 @@ func detectFormat(source string, r io.Reader) (Format, io.Reader) {
 }
 
 func MaybeDecompress(r io.Reader) (io.Reader, io.Closer, error) {
-	var header [2]byte
+	var header [3]byte
 	n, err := io.ReadFull(r, header[:])
 	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
 		return nil, nil, fmt.Errorf("read input header: %w", err)
 	}
 	stream := io.MultiReader(bytes.NewReader(header[:n]), r)
 	if n < 2 || header[0] != 0x1f || header[1] != 0x8b {
+		if n >= 3 && header[0] == 'B' && header[1] == 'Z' && header[2] == 'h' {
+			return bzip2.NewReader(stream), nil, nil
+		}
 		return stream, nil, nil
 	}
 	gz, err := gzip.NewReader(stream)

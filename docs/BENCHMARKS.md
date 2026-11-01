@@ -200,9 +200,10 @@ go test -run '^$' -bench '^BenchmarkProxyDNSCacheHit' -benchmem -count=5 ./inter
 go test -run '^$' -bench '^BenchmarkWriter$' -benchmem -count=5 ./internal/output
 ```
 
-Result writers now batch output in 64 KiB chunks. Current serializer medians
-were 301 ns/result for TXT, 3.50 us/result for JSONL, and 1.91 us/result for
-CSV. These are encoding costs against `io.Discard`, not disk-throughput claims.
+Result writers batch output in 64 KiB chunks. The 2026-11-01 serializer rerun
+measured medians of 238 ns/result for TXT, 3.11 us for streaming JSON arrays,
+3.17 us for JSONL, and 1.82 us for CSV. These are encoding costs against
+`io.Discard`, not disk-throughput claims.
 
 The controlled 500,000-item scheduler was also rerun three times at concurrency
 128 against this tree. It measured 910,336 items/s median (range

@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -80,12 +81,27 @@ func TestExitCodesAndUnknownCommand(t *testing.T) {
 	if code, _, diag := run([]string{"check", "--keep-partial"}, ""); code != ExitUsage || !strings.Contains(diag, "requires working-output") {
 		t.Fatalf("keep-partial code=%d diag=%q", code, diag)
 	}
+	if code, _, diag := run([]string{"check", "--metrics-output", "-"}, ""); code != ExitUsage || !strings.Contains(diag, "requires a file path") {
+		t.Fatalf("metrics stdout code=%d diag=%q", code, diag)
+	}
 }
 
 func TestHelpUsesNetVexIdentity(t *testing.T) {
 	code, out, diag := run([]string{"help"}, "")
 	if code != ExitOK || !strings.Contains(out, "NetVex") || !strings.Contains(out, "Usage: netvex") || diag != "" {
 		t.Fatalf("code=%d out=%q diag=%q", code, out, diag)
+	}
+}
+
+func TestCapabilitiesHumanAndJSON(t *testing.T) {
+	code, human, diag := run([]string{"capabilities"}, "")
+	if code != ExitOK || diag != "" || !strings.Contains(human, "protocols=http,https") || !strings.Contains(human, "prometheus_textfile") {
+		t.Fatalf("code=%d human=%q diag=%q", code, human, diag)
+	}
+	code, document, diag := run([]string{"capabilities", "--json"}, "")
+	var capabilities capabilityDocument
+	if code != ExitOK || diag != "" || json.Unmarshal([]byte(document), &capabilities) != nil || capabilities.SchemaVersion != 1 || !slices.Contains(capabilities.InputCompression, "bzip2") || !slices.Contains(capabilities.OutputFormats, "json") {
+		t.Fatalf("code=%d document=%q diag=%q capabilities=%+v", code, document, diag, capabilities)
 	}
 }
 
@@ -213,6 +229,11 @@ func TestMergeBestAndRotationFilters(t *testing.T) {
 	if code != ExitOK || !strings.Contains(stdout, `"status":"ok"`) {
 		t.Fatalf("code=%d stdout=%q diag=%q", code, stdout, diag)
 	}
+	code, stdout, diag = run([]string{"results", "--run", out, "--format", "json", "--status", "ok"}, "")
+	var exported []model.Result
+	if code != ExitOK || json.Unmarshal([]byte(stdout), &exported) != nil || len(exported) != 1 {
+		t.Fatalf("JSON export code=%d stdout=%q diag=%q", code, stdout, diag)
+	}
 }
 
 func TestQualityPolicyAndJUnit(t *testing.T) {
@@ -264,7 +285,7 @@ func TestResumeIncludesCheckpointResults(t *testing.T) {
 func TestShellCompletions(t *testing.T) {
 	for _, shell := range []string{"bash", "zsh", "fish"} {
 		code, out, diag := run([]string{"completion", shell}, "")
-		if code != ExitOK || !strings.Contains(out, "netvex") || !strings.Contains(out, "auto-probe-timeout") || !strings.Contains(out, "intelligence-bytes") || !strings.Contains(out, "keep-partial") || !strings.Contains(out, "proxy-dns-cache-ttl") || diag != "" {
+		if code != ExitOK || !strings.Contains(out, "netvex") || !strings.Contains(out, "auto-probe-timeout") || !strings.Contains(out, "intelligence-bytes") || !strings.Contains(out, "keep-partial") || !strings.Contains(out, "proxy-dns-cache-ttl") || !strings.Contains(out, "metrics-output") || diag != "" {
 			t.Fatalf("shell=%s code=%d out=%q diag=%q", shell, code, out, diag)
 		}
 	}
@@ -318,6 +339,12 @@ func TestSavedResultCommands(t *testing.T) {
 	}
 	if code, out, diag = run([]string{"stats", "--data-dir", d, "--run", "latest", "--compare", w.ID, "--json"}, ""); code != ExitOK || !strings.Contains(out, "baseline") {
 		t.Fatalf("stats %d %s %s", code, out, diag)
+	}
+	if code, out, diag = run([]string{"stats", "--data-dir", d, "--run", "latest", "--prometheus"}, ""); code != ExitOK || !strings.Contains(out, `netvex_run_results{status="ok"} 1`) {
+		t.Fatalf("prometheus stats %d %s %s", code, out, diag)
+	}
+	if code, _, _ = run([]string{"stats", "--data-dir", d, "--run", "latest", "--json", "--prometheus"}, ""); code != ExitUsage {
+		t.Fatalf("mixed stats output=%d", code)
 	}
 }
 
@@ -545,7 +572,11 @@ func TestNoValidInputDoesNotReplaceWorkingOutput(t *testing.T) {
 
 func TestSummaryOutputRequireCountAndAtomicPreservation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "summary.json")
-	args := []string{"check", "--target", "http://127.0.0.1/", "--quiet", "--summary-output", path, "--require-count", "1"}
+	metricsPath := filepath.Join(filepath.Dir(path), "netvex.prom")
+	if code, _, _ := run([]string{"check", "--summary-output", path, "--metrics-output", path}, "proxy.test:8080\n"); code != ExitUsage {
+		t.Fatalf("colliding report outputs code=%d", code)
+	}
+	args := []string{"check", "--target", "http://127.0.0.1/", "--quiet", "--summary-output", path, "--metrics-output", metricsPath, "--require-count", "1"}
 	code, _, diag := run(args, "proxy.test:8080\n")
 	if code != ExitNoSuccess || !strings.Contains(diag, "saved run summary") {
 		t.Fatalf("code=%d diag=%q", code, diag)
@@ -562,6 +593,11 @@ func TestSummaryOutputRequireCountAndAtomicPreservation(t *testing.T) {
 		t.Fatalf("summary=%+v", summary)
 	}
 	assertPrivateMode(t, path)
+	metricsPayload, err := os.ReadFile(metricsPath)
+	if err != nil || !strings.Contains(string(metricsPayload), `netvex_run_results{status="ok"} 0`) || strings.Contains(string(metricsPayload), "proxy.test") {
+		t.Fatalf("metrics=%q err=%v", metricsPayload, err)
+	}
+	assertPrivateMode(t, metricsPath)
 	if code, _, _ := run(args, "proxy.test:8080\n"); code != ExitOperational {
 		t.Fatalf("existing summary code=%d", code)
 	}

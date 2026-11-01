@@ -1,7 +1,7 @@
 # Automation and distributed datasets
 
-NetVex keeps machine results on stdout and diagnostics on stderr. JSONL is
-the lossless streaming format; CSV is flat; TXT contains redacted proxy URIs.
+NetVex keeps machine results on stdout and diagnostics on stderr. JSON and JSONL
+are lossless streaming formats; CSV is flat; TXT contains redacted proxy URIs.
 Exit 5 means validation completed but a requested success or quality threshold
 was not met.
 
@@ -21,6 +21,18 @@ netvex check --scenario examples/scenario.json \
 ```
 
 Reports and summaries are mode 0600, synchronized, and atomically published.
+
+For Prometheus-compatible monitoring without running a NetVex service or
+opening a listening port, write an aggregate textfile snapshot:
+
+```sh
+netvex check --quiet --metrics-output netvex.prom proxies.txt
+netvex stats --run latest --prometheus
+```
+
+The snapshot has fixed low-cardinality labels and contains no proxy or target
+identifiers. A wrapper can negotiate supported features with
+`netvex capabilities --json`.
 
 ## Checkpoint and resume
 

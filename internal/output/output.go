@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"strconv"
@@ -16,6 +17,7 @@ type Format string
 
 const (
 	FormatTable Format = "table"
+	FormatJSON  Format = "json"
 	FormatJSONL Format = "jsonl"
 	FormatCSV   Format = "csv"
 	FormatTXT   Format = "txt"
@@ -24,7 +26,7 @@ const (
 func ParseFormat(s string) (Format, error) {
 	f := Format(strings.ToLower(s))
 	switch f {
-	case FormatTable, FormatJSONL, FormatCSV, FormatTXT:
+	case FormatTable, FormatJSON, FormatJSONL, FormatCSV, FormatTXT:
 		return f, nil
 	default:
 		return "", fmt.Errorf("unsupported output format %q", s)
@@ -37,6 +39,7 @@ type Writer struct {
 	format Format
 	color  bool
 	header bool
+	closed bool
 	csv    *csv.Writer
 	json   *json.Encoder
 }
@@ -46,14 +49,27 @@ func New(out io.Writer, format Format, color bool) *Writer {
 	w := &Writer{out: buffer, buffer: buffer, format: format, color: color}
 	if format == FormatCSV {
 		w.csv = csv.NewWriter(buffer)
-	} else if format == FormatJSONL {
+	} else if format == FormatJSONL || format == FormatJSON {
 		w.json = json.NewEncoder(buffer)
 	}
 	return w
 }
 
 func (w *Writer) WriteResult(r model.Result) error {
+	if w.closed {
+		return errors.New("output writer is closed")
+	}
 	switch w.format {
+	case FormatJSON:
+		separator := "[\n"
+		if w.header {
+			separator = ",\n"
+		}
+		if _, err := io.WriteString(w.out, separator); err != nil {
+			return err
+		}
+		w.header = true
+		return w.json.Encode(r)
 	case FormatJSONL:
 		return w.json.Encode(r)
 	case FormatCSV:
@@ -136,9 +152,22 @@ func (w *Writer) WriteResult(r model.Result) error {
 }
 
 func (w *Writer) Flush() error {
+	if w.closed {
+		return nil
+	}
+	w.closed = true
 	if w.csv != nil {
 		w.csv.Flush()
 		if err := w.csv.Error(); err != nil {
+			return err
+		}
+	}
+	if w.format == FormatJSON {
+		terminator := "[]\n"
+		if w.header {
+			terminator = "]\n"
+		}
+		if _, err := io.WriteString(w.out, terminator); err != nil {
 			return err
 		}
 	}

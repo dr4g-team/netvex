@@ -1,7 +1,7 @@
 # Data schemas
 
-Machine formats are UTF-8. JSONL contains one complete result object per line;
-CSV has a stable header row. Times use RFC 3339 UTC and durations use
+Machine formats are UTF-8. JSON output is one streamed array, JSONL contains
+one complete result object per line, and CSV has a stable header row. Times use RFC 3339 UTC and durations use
 milliseconds as floating-point values.
 
 The current `schema_version` is 5. Readers should tolerate unknown fields and
@@ -53,7 +53,7 @@ observation.
 The CSV export is intentionally flat and contains the last observation's
 stage/code plus the most recent successful observation's exit, anonymity,
 transfer, and metadata evidence. It also contains the aggregate score and
-median. JSONL is the lossless export. TXT emits only safe proxy URIs and should
+median. JSON and JSONL are lossless exports. TXT emits only safe proxy URIs and should
 be filtered by status when used as a working-proxy list.
 
 Run summaries contain cumulative proxy `processed` count, checkpoint `restored`
@@ -77,3 +77,12 @@ run; `0s` means every hostname dial used the system resolver normally.
 When a quality policy is active, `quality` contains a boolean result and the
 actual/operator/expected tuple for every evaluated check. The same evidence is
 available as JUnit XML with `--junit-output`.
+
+`--metrics-output` and `stats --prometheus` expose an aggregate-only Prometheus
+text snapshot. Metric labels are a fixed vocabulary; proxy endpoints, targets,
+pool labels, failure messages, and credentials are deliberately excluded.
+
+`capabilities --json` uses its own `schema_version: 1` document containing the
+implemented protocols, authentication methods, input/output formats,
+compression methods, reports, safeguards, and cross-build platforms. Consumers
+should ignore unknown future fields.

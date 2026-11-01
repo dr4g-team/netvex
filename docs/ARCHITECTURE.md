@@ -6,7 +6,7 @@ HTTP service, plugin execution, or downloaded code path.
 Data flow:
 
 ```text
-text / CSV / JSON / gzip / scenario
+text / CSV / JSON / gzip / bzip2 / scenario
         |
  streaming parser + hash deduplication
         |
@@ -18,7 +18,7 @@ text / CSV / JSON / gzip / scenario
         |
  raw observations -> target quorum + rotation + score + bounded histogram
         |
- stdout / checkpoint / quality gate / atomic optional JSONL history
+ stdout / checkpoint / quality gate / Prometheus textfile / atomic optional JSONL history
 ```
 
 Packages are divided by responsibility: `input`, `config`, `scenario`, `policy`,
@@ -74,7 +74,7 @@ bounded 64 KiB output buffer to batch small writes. These keep
 allocation and resident-memory growth low on large datasets; exact
 deduplication can be disabled for constant parser state.
 
-Gzip is detected from stream magic bytes rather than trusted file extensions.
+Gzip and bzip2 are detected from stream magic bytes rather than trusted file extensions.
 UTF-8 BOM prefixes are consumed incrementally for every structured and text
 format.
 The byte and record-count budgets are shared across every input source and

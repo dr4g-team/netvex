@@ -109,8 +109,32 @@ func TestWriterBatchesSmallResults(t *testing.T) {
 	}
 }
 
+func TestJSONArrayStreamingAndEmptyOutput(t *testing.T) {
+	for _, count := range []int{0, 2} {
+		var destination bytes.Buffer
+		writer := New(&destination, FormatJSON, false)
+		for index := 0; index < count; index++ {
+			result := sample()
+			result.ID = strconv.Itoa(index)
+			if err := writer.WriteResult(result); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := writer.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		var decoded []model.Result
+		if err := json.Unmarshal(destination.Bytes(), &decoded); err != nil || len(decoded) != count {
+			t.Fatalf("count=%d output=%q decoded=%d err=%v", count, destination.String(), len(decoded), err)
+		}
+		if err := writer.WriteResult(sample()); err == nil {
+			t.Fatal("accepted a result after flush")
+		}
+	}
+}
+
 func BenchmarkWriter(b *testing.B) {
-	for _, format := range []Format{FormatTXT, FormatJSONL, FormatCSV} {
+	for _, format := range []Format{FormatTXT, FormatJSON, FormatJSONL, FormatCSV} {
 		b.Run(string(format), func(b *testing.B) {
 			w := New(io.Discard, format, false)
 			result := sample()
