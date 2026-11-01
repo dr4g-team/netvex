@@ -52,6 +52,7 @@ type Checker struct {
 	targetNames       map[string]string
 	expectedTargets   []string
 	IncludeInputProxy bool
+	IdentityKey       func() []byte
 }
 
 type jsonExpectation struct {
@@ -305,6 +306,9 @@ type resolveEntry struct {
 func NewChecker(c config.Config) *Checker {
 	baseline, _ := netip.ParseAddr(c.AnonymityBaseline)
 	dialer := &net.Dialer{KeepAlive: -1}
+	if !c.AllowPrivateProxy {
+		dialer.ControlContext = protocol.GatewayGuard
+	}
 	connector := protocol.Connector{ConnectTimeout: c.ConnectTimeout, AllowRemoteDNS: c.AllowRemoteDNS, Dialer: dialer}
 	if c.ProxyDNSCacheTTL > 0 {
 		connector.ProxyDNS = protocol.NewProxyDNSCache(c.ProxyDNSCacheTTL, min(c.MaxInputEntries, 4096))
@@ -412,7 +416,7 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		}
 		required *= quorum
 	}
-	r := model.Result{SchemaVersion: model.SchemaVersion, ID: p.Key(), Proxy: p.SafeURI(), Endpoint: p.Address(), Protocol: p.Protocol, Label: c.Label, RequiredSuccesses: required, TargetQuorum: quorum, CheckedAt: time.Now().UTC()}
+	r := model.Result{SchemaVersion: model.SchemaVersion, ID: p.ResultID(c.IdentityKey), Proxy: p.SafeURI(), Endpoint: p.Address(), Protocol: p.Protocol, Label: c.Label, RequiredSuccesses: required, TargetQuorum: quorum, CheckedAt: time.Now().UTC()}
 	for i := 0; i < attemptCount; i++ {
 		target := c.Config.Targets[i%len(c.Config.Targets)]
 		intervalDue := i > 0 && (!c.Config.TargetMatrix || i%len(c.Config.Targets) == 0)
@@ -435,7 +439,7 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		if !c.Config.TargetMatrix && obs.Status == model.StatusOK && c.Config.StopOnSuccess && r.Successes >= required {
 			break
 		}
-		globalPermanent := obs.Status == model.StatusAuthFailed || obs.Status == model.StatusInvalid || (!c.Config.TargetMatrix && obs.Status == model.StatusPolicyBlock)
+		globalPermanent := obs.Status == model.StatusAuthFailed || obs.Status == model.StatusInvalid || obs.Code == "proxy_gateway_blocked" || (!c.Config.TargetMatrix && obs.Status == model.StatusPolicyBlock)
 		if !c.Config.RetryPermanent && globalPermanent {
 			break
 		}
@@ -482,6 +486,11 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		} else {
 			r.Status = model.StatusInterrupted
 		}
+	}
+	if ctx.Err() != nil && r.Status != model.StatusOK {
+		// A cancelled proxy has no verdict. Recording its last failure would make
+		// resume treat an unfinished proxy as finished.
+		r.Status = model.StatusInterrupted
 	}
 	if r.Status == model.StatusOK && c.IncludeInputProxy {
 		exportProxy := p
@@ -816,24 +825,39 @@ func (c *Checker) waitRate(ctx context.Context) bool {
 	if c.Config.RateLimit <= 0 {
 		return true
 	}
-	spacing := time.Duration(float64(time.Second) / c.Config.RateLimit)
-	c.rateMu.Lock()
-	defer c.rateMu.Unlock()
 	if ctx.Err() != nil {
 		return false
 	}
-	wait := time.Until(c.nextStart)
-	if wait > 0 {
-		timer := time.NewTimer(wait)
-		defer timer.Stop()
-		select {
-		case <-timer.C:
-		case <-ctx.Done():
-			return false
-		}
+	spacing := time.Duration(float64(time.Second) / c.Config.RateLimit)
+	// Slots are reserved on a virtual schedule and slept on outside the lock.
+	// Timer overshoot therefore cannot accumulate, which previously capped the
+	// real rate near 900/s whatever was configured.
+	now := time.Now()
+	c.rateMu.Lock()
+	slot := c.nextStart
+	if slot.Before(now.Add(-rateCatchUp)) {
+		// Idle time earns no credit; only a schedule in progress may catch up.
+		slot = now
 	}
-	c.nextStart = time.Now().Add(spacing)
-	return true
+	c.nextStart = slot.Add(spacing)
+	c.rateMu.Unlock()
+	wait := slot.Sub(now)
+	if wait <= 0 {
+		return true
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		c.rateMu.Lock()
+		if c.nextStart.Equal(slot.Add(spacing)) {
+			c.nextStart = slot
+		}
+		c.rateMu.Unlock()
+		return false
+	}
 }
 
 func (c *Checker) request(ctx context.Context, p model.Proxy, dest policy.Destination, rules compiledResponseRules) (model.Observation, error) {
@@ -1073,6 +1097,10 @@ func (c *Checker) acquireTarget(ctx context.Context, host string) func() {
 	}
 }
 
+// rateCatchUp is how far the schedule may lag before unused capacity is
+// forfeited. It absorbs timer overshoot without allowing a meaningful burst.
+const rateCatchUp = 5 * time.Millisecond
+
 func finishError(obs model.Observation, start time.Time, err error) model.Observation {
 	obs.Timings.TotalMS = ms(time.Since(start))
 	if err == nil {
@@ -1086,7 +1114,7 @@ func finishError(obs model.Observation, start time.Time, err error) model.Observ
 		obs.Stage = pe.Stage
 		obs.Status = pe.Status
 		obs.Code = pe.Code
-		obs.Message = pe.Error()
+		obs.Message = model.BoundedMessage(pe.Error())
 	} else {
 		obs.Status = statusFor(err)
 		obs.Code = "operation_failed"
@@ -1129,13 +1157,32 @@ func selectedHeaders(h http.Header) map[string]string {
 	return out
 }
 
+// forwardingHeaders names request headers that reveal a proxy to the echo
+// target. Any of them rules out the elite classification.
+var forwardingHeaders = map[string]struct{}{
+	"via": {}, "forwarded": {}, "forwarded-for": {}, "x-forwarded-for": {}, "x-forwarded-host": {},
+	"x-forwarded-proto": {}, "x-forwarded-server": {}, "x-real-ip": {}, "client-ip": {}, "x-client-ip": {},
+	"x-cluster-client-ip": {}, "true-client-ip": {}, "cf-connecting-ip": {}, "fastly-client-ip": {},
+	"x-originating-ip": {}, "x-remote-ip": {}, "x-remote-addr": {}, "x-proxy-id": {}, "proxy-connection": {},
+	"x-bluecoat-via": {}, "x-squid-error": {}, "xroxy-connection": {},
+}
+
+// maxPlainIPBytes admits the longest IPv6 text form plus surrounding whitespace.
+const maxPlainIPBytes = 64
+
 func extractIntelligence(body []byte, baseline netip.Addr) (string, string, []string) {
 	var v map[string]any
 	if json.Unmarshal(body, &v) != nil {
+		// Echo services such as ipify and icanhazip answer with a bare address.
+		if len(body) <= maxPlainIPBytes {
+			if address, err := netip.ParseAddr(strings.TrimSpace(string(body))); err == nil {
+				return address.Unmap().String(), plainBodyAnonymity(address, baseline), nil
+			}
+		}
 		return "", "unavailable", nil
 	}
 	exit := ""
-	for _, k := range []string{"ip", "origin", "query"} {
+	for _, k := range []string{"ip", "origin", "query", "ip_addr", "address", "client_ip"} {
 		if s, ok := v[k].(string); ok {
 			part, _, _ := strings.Cut(s, ",")
 			part = strings.TrimSpace(part)
@@ -1147,10 +1194,11 @@ func extractIntelligence(body []byte, baseline netip.Addr) (string, string, []st
 	}
 	evidence := []string{}
 	baselineForwarded := false
-	if headers, ok := v["headers"].(map[string]any); ok {
+	headers, headersEchoed := v["headers"].(map[string]any)
+	if headersEchoed {
 		for k, val := range headers {
 			lk := strings.ToLower(k)
-			if lk == "via" || lk == "forwarded" || lk == "x-forwarded-for" || lk == "x-real-ip" || lk == "client-ip" {
+			if _, forwarding := forwardingHeaders[lk]; forwarding {
 				evidence = append(evidence, http.CanonicalHeaderKey(k))
 				if baseline.IsValid() && containsIP(fmt.Sprint(val), baseline) {
 					baselineForwarded = true
@@ -1169,11 +1217,20 @@ func extractIntelligence(body []byte, baseline netip.Addr) (string, string, []st
 			anon = "transparent"
 		case len(evidence) > 0:
 			anon = "anonymous"
-		case exitAddr.IsValid():
+		case exitAddr.IsValid() && headersEchoed:
+			// Elite requires seeing the request headers. A body with only an
+			// address cannot show that forwarding headers were absent.
 			anon = "elite"
 		}
 	}
 	return exit, anon, evidence
+}
+
+func plainBodyAnonymity(exit, baseline netip.Addr) string {
+	if baseline.IsValid() && exit.Unmap() == baseline.Unmap() {
+		return "transparent"
+	}
+	return "undetermined"
 }
 
 func containsIP(value string, expected netip.Addr) bool {

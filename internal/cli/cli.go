@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -206,6 +207,7 @@ type checkOptions struct {
 	progressInterval                                            string
 	targets, allowHosts, requireText, rejectText, expectJSON    stringsFlag
 	allowPrivate, allowRemoteDNS, save, requireSuccess, verbose bool
+	allowPrivateProxies                                         bool
 	dataDir                                                     string
 	maxRedirects                                                int
 	requireCount                                                int
@@ -239,8 +241,28 @@ func (c CLI) newFlagSet(name string) (*flag.FlagSet, *bytesBuffer) {
 
 type bytesBuffer struct{ strings.Builder }
 
+// parseArguments accepts flags before and after positional arguments, because
+// the standard parser treats everything after the first file name as a file.
+func parseArguments(fs *flag.FlagSet, args []string) error {
+	positional := make([]string, 0, 4)
+	for {
+		if err := fs.Parse(args); err != nil {
+			return err
+		}
+		rest := fs.Args()
+		consumed := args[:len(args)-len(rest)]
+		if len(rest) == 0 || (len(consumed) > 0 && consumed[len(consumed)-1] == "--") {
+			positional = append(positional, rest...)
+			break
+		}
+		positional = append(positional, rest[0])
+		args = rest[1:]
+	}
+	return fs.Parse(append([]string{"--"}, positional...))
+}
+
 func (c CLI) parseFlags(fs *flag.FlagSet, buf *bytesBuffer, args []string) (bool, int) {
-	err := fs.Parse(args)
+	err := parseArguments(fs, args)
 	if err == nil {
 		return true, ExitOK
 	}
@@ -298,6 +320,7 @@ func (c CLI) addCheckFlags(fs *flag.FlagSet, o *checkOptions) {
 	fs.Var(&o.allowHosts, "allow-host", "additional redirect hostname (repeatable)")
 	fs.BoolVar(&o.allowPrivate, "allow-private-targets", false, "allow private/loopback validation destinations (dangerous)")
 	fs.BoolVar(&o.allowRemoteDNS, "allow-remote-dns", false, "allow proxy-side DNS for SOCKS4a/SOCKS5 and HTTP CONNECT/forwarding (reduces rebinding protection)")
+	fs.BoolVar(&o.allowPrivateProxies, "allow-private-proxies", false, "allow proxy gateways on private, loopback, or special-purpose addresses")
 	fs.BoolVar(&o.retryPermanent, "retry-permanent", false, "repeat authentication, policy, and invalid-protocol failures")
 	fs.BoolVar(&o.stopOnSuccess, "stop-on-success", false, "stop remaining measurements once the reliability threshold is reached")
 	fs.BoolVar(&o.noDeduplicate, "no-deduplicate", false, "disable exact deduplication to use bounded parser memory")
@@ -465,6 +488,9 @@ func (c CLI) loadCheck(o checkOptions) (config.Config, model.Protocol, output.Fo
 	}
 	if o.allowRemoteDNS || o.explicit["allow-remote-dns"] {
 		cfg.AllowRemoteDNS = o.allowRemoteDNS
+	}
+	if o.allowPrivateProxies || o.explicit["allow-private-proxies"] {
+		cfg.AllowPrivateProxy = o.allowPrivateProxies
 	}
 	if o.retryPermanent || o.explicit["retry-permanent"] {
 		cfg.RetryPermanent = o.retryPermanent
@@ -656,7 +682,11 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)
 	defer stop()
+	// Restoring default signal handling lets a second Ctrl-C end a stuck shutdown.
+	context.AfterFunc(ctx, stop)
+	identityKey := c.identityKey(cfg.DataDir)
 	checker := engine.NewChecker(cfg)
+	checker.IdentityKey = identityKey
 	checker.Metadata = metadataProvider
 	checker.Label = o.label
 	checker.IncludeInputProxy = o.workingOutput != ""
@@ -711,7 +741,7 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		resumeCheckpoint = true
 	}
 	var checkpoint *store.Checkpoint
-	completed := map[string]struct{}{}
+	completed := map[string]store.CheckpointEntry{}
 	checkpointExisted := false
 	if checkpointPath != "" {
 		if _, statErr := os.Lstat(checkpointPath); statErr == nil {
@@ -886,7 +916,7 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		parser := inputpkg.New(inputpkg.Options{Format: format, DefaultProtocol: proto, Source: "input", MaxBytes: cfg.MaxInputBytes, MaxEntries: cfg.MaxInputEntries, Deduplicate: !o.noDeduplicate})
 		warnedCredentialFiles := map[string]struct{}{}
 		emit := func(p model.Proxy) error {
-			if _, done := completed[p.Key()]; done {
+			if _, done := completed[p.ResultID(identityKey)]; done {
 				resumed.Add(1)
 				return nil
 			}
@@ -958,7 +988,7 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 	summary := model.RunSummary{SchemaVersion: model.SchemaVersion, Configuration: runConfiguration(cfg, proto, o), StartedAt: start.UTC(), StatusCount: map[model.Status]int{}, FailureCodes: map[string]int{}, FailureStages: map[model.Stage]int{}, Targets: map[string]model.TargetSummary{}, TargetHealth: targetHealth}
 	latencies := metrics.NewHistogram(1, 300000)
 	handleResult := func(r model.Result, writeCheckpoint bool) error {
-		if writeCheckpoint && checkpoint != nil {
+		if writeCheckpoint && checkpoint != nil && r.Status != model.StatusInterrupted {
 			if err := checkpoint.Write(r); err != nil {
 				return fmt.Errorf("checkpoint: %w", err)
 			}
@@ -1026,7 +1056,7 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		return nil
 	}
 	if resumeCheckpoint {
-		if err := store.ReadResults(checkpointPath, func(result model.Result) error { return handleResult(result, false) }); err != nil {
+		if err := checkpoint.Replay(func(result model.Result) error { return handleResult(result, false) }); err != nil {
 			fmt.Fprintln(c.Stderr, "resume checkpoint error:", err)
 			return ExitOperational
 		}
@@ -1073,12 +1103,16 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 			return ExitOperational
 		}
 	}
-	summary.Input = <-statsCh
-	summary.Input.Resumed = int(resumed.Load())
-	if err := <-parseErr; err != nil && !errors.Is(err, context.Canceled) {
-		fmt.Fprintln(c.Stderr, "input error:", err)
-		return ExitOperational
+	if ctx.Err() == nil {
+		summary.Input = <-statsCh
+		if err := <-parseErr; err != nil && !errors.Is(err, context.Canceled) {
+			fmt.Fprintln(c.Stderr, "input error:", err)
+			return ExitOperational
+		}
 	}
+	// After an interrupt the parser may be blocked reading an open stdin, which
+	// cannot be cancelled, so the run must not wait for it.
+	summary.Input.Resumed = int(resumed.Load())
 	if checkpoint != nil {
 		if err := checkpoint.Close(); err != nil {
 			fmt.Fprintln(c.Stderr, "checkpoint error:", err)
@@ -1189,6 +1223,9 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 			return ExitOperational
 		}
 	}
+	if count := summary.FailureCodes["local_resource_exhausted"]; count > 0 {
+		fmt.Fprintf(c.Stderr, "warning: %d attempts failed because this host ran out of sockets or file descriptors; their proxies are inconclusive, not dead\n", count)
+	}
 	if o.verbose || c.IsTerminal {
 		fmt.Fprintf(c.Stderr, "read=%d accepted=%d duplicates=%d resumed=%d rejected=%d processed=%d ok=%d unreliable=%d failed=%d inconclusive=%d elapsed=%s rate=%.1f/s p50=%.0fms p95=%.0fms p99=%.0fms\n", summary.Input.Read, summary.Input.Accepted, summary.Input.Duplicates, resumed.Load(), summary.Input.Rejected, summary.Processed, summary.Successful, summary.Unreliable, summary.Failed, summary.Inconclusive, time.Since(start).Round(time.Millisecond), summary.RatePerSec, summary.LatencyP50MS, summary.LatencyP95MS, summary.LatencyP99MS)
 		if top := topCounts(summary.FailureCodes, 5); top != "" {
@@ -1199,6 +1236,21 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		return ExitNoSuccess
 	}
 	return ExitOK
+}
+
+// identityKey loads the secret behind credential-scoped result IDs on first use,
+// so runs without credentials never touch the data directory. If it cannot be
+// stored, IDs fall back to this process: resume then revalidates instead of
+// wrongly skipping proxies.
+func (c CLI) identityKey(dataDir string) func() []byte {
+	return sync.OnceValue(func() []byte {
+		key, err := store.LoadIdentityKey(dataDir)
+		if err == nil {
+			return key
+		}
+		fmt.Fprintln(c.Stderr, "warning: credential identity key is not persistent:", err)
+		return store.EphemeralIdentityKey()
+	})
 }
 
 func commitPartialWorking(output *secureOutput, path string, successful int, diagnostics io.Writer) error {
@@ -1230,7 +1282,7 @@ func runConfiguration(cfg config.Config, proto model.Protocol, o checkOptions) m
 		QueueSize: cfg.QueueSize, PerTarget: cfg.PerTarget, RateLimit: cfg.RateLimit,
 		Repeat: cfg.Repeat, MinSuccessRate: cfg.MinSuccessRate, ConnectTimeout: cfg.ConnectTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(), AutoProbeTimeout: cfg.AutoProbeTimeout.String(),
 		RetryBackoff: cfg.RetryBackoff.String(), StopOnSuccess: cfg.StopOnSuccess,
-		RetryPermanent: cfg.RetryPermanent, AllowRemoteDNS: cfg.AllowRemoteDNS, ProxyDNSCacheTTL: cfg.ProxyDNSCacheTTL.String(),
+		RetryPermanent: cfg.RetryPermanent, AllowRemoteDNS: cfg.AllowRemoteDNS, AllowPrivateProxy: cfg.AllowPrivateProxy, ProxyDNSCacheTTL: cfg.ProxyDNSCacheTTL.String(),
 		MaxResponseBytes: cfg.MaxResponseBytes, IntelligenceBytes: min(cfg.IntelligenceBytes, cfg.MaxResponseBytes), MinResponseBytes: cfg.MinResponseBytes, MinThroughput: cfg.MinThroughputKBPS,
 		ContentRules:    len(cfg.RequireText) + len(cfg.RejectText) + len(cfg.ExpectJSON),
 		MetadataEnabled: cfg.MetadataFile != "",
@@ -1511,9 +1563,10 @@ func (c CLI) importCmd(args []string) int {
 		return ExitUsage
 	}
 	parser := inputpkg.New(inputpkg.Options{Format: parsedInputFormat, DefaultProtocol: p, Source: "input", MaxBytes: *max, MaxEntries: *maxEntries, Deduplicate: !*noDeduplicate})
+	identityKey := c.identityKey(config.Defaults().DataDir)
 	emit := func(x model.Proxy) error {
 		if *outFmt == "jsonl" {
-			b, _ := json.Marshal(map[string]any{"id": x.Key(), "proxy": x.SafeURI(), "endpoint": x.Address(), "protocol": x.Protocol})
+			b, _ := json.Marshal(map[string]any{"id": x.ResultID(identityKey), "proxy": x.SafeURI(), "endpoint": x.Address(), "protocol": x.Protocol})
 			_, err := fmt.Fprintln(c.Stdout, string(b))
 			return err
 		} else {

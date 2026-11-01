@@ -219,3 +219,10 @@ func TestRejectsExcessiveTargetMatrix(t *testing.T) {
 		t.Fatalf("err=%v", err)
 	}
 }
+
+func TestDataDirEnvironmentAppliesToDefaults(t *testing.T) {
+	t.Setenv("NETVEX_DATA_DIR", "/tmp/netvex-env-dir")
+	if dir := Defaults().DataDir; dir != "/tmp/netvex-env-dir" {
+		t.Fatalf("dir=%q", dir)
+	}
+}

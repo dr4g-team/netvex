@@ -13,6 +13,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -20,6 +21,7 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -878,5 +880,119 @@ func TestTargetMatrixQuorumAndLabels(t *testing.T) {
 	}
 	if result.TargetResults[0].Target != "primary" || !result.TargetResults[0].Qualified || result.TargetResults[1].Target != "secondary" || result.TargetResults[1].Qualified {
 		t.Fatalf("targets=%+v", result.TargetResults)
+	}
+}
+
+func TestRateLimiterSustainsHighRates(t *testing.T) {
+	c := NewChecker(config.Defaults())
+	c.Config.RateLimit = 5000
+	const permits = 2000
+	start := time.Now()
+	for range permits {
+		if !c.waitRate(context.Background()) {
+			t.Fatal("unexpected cancellation")
+		}
+	}
+	elapsed := time.Since(start)
+	real := permits / elapsed.Seconds()
+	if real < 3500 || real > 5500 {
+		t.Fatalf("configured 5000/s, measured %.0f/s", real)
+	}
+}
+
+func TestRateLimiterSharesScheduleAcrossWorkers(t *testing.T) {
+	c := NewChecker(config.Defaults())
+	c.Config.RateLimit = 200
+	var group sync.WaitGroup
+	start := time.Now()
+	for range 8 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			for range 5 {
+				c.waitRate(context.Background())
+			}
+		}()
+	}
+	group.Wait()
+	if elapsed := time.Since(start); elapsed < 180*time.Millisecond {
+		t.Fatalf("40 permits at 200/s finished in %s", elapsed)
+	}
+}
+
+func TestPlainTextEchoProvidesExitIP(t *testing.T) {
+	baseline := netip.MustParseAddr("198.51.100.1")
+	for _, test := range []struct {
+		body, exit, anonymity string
+	}{
+		{"203.0.113.9\n", "203.0.113.9", "undetermined"},
+		{"  2001:db8::1\r\n", "2001:db8::1", "undetermined"},
+		{"198.51.100.1", "198.51.100.1", "transparent"},
+		{"<html>not an address</html>", "", "unavailable"},
+		{strings.Repeat("1", 200), "", "unavailable"},
+		{`{"ip_addr":"203.0.113.9"}`, "203.0.113.9", "undetermined"},
+	} {
+		exit, anonymity, _ := extractIntelligence([]byte(test.body), baseline)
+		if exit != test.exit || anonymity != test.anonymity {
+			t.Fatalf("%q: exit=%q anonymity=%q", test.body, exit, anonymity)
+		}
+	}
+}
+
+func TestEliteRequiresEchoedHeaders(t *testing.T) {
+	baseline := netip.MustParseAddr("198.51.100.1")
+	if _, anonymity, _ := extractIntelligence([]byte(`{"ip":"203.0.113.9"}`), baseline); anonymity != "undetermined" {
+		t.Fatalf("address-only body classified as %q", anonymity)
+	}
+	if _, anonymity, _ := extractIntelligence([]byte(`{"origin":"203.0.113.9","headers":{"Host":"x"}}`), baseline); anonymity != "elite" {
+		t.Fatalf("clean header echo classified as %q", anonymity)
+	}
+	for _, header := range []string{"X-Client-IP", "True-Client-IP", "Proxy-Connection", "CF-Connecting-IP", "X-Proxy-ID"} {
+		body := fmt.Sprintf(`{"origin":"203.0.113.9","headers":{%q:"1"}}`, header)
+		if _, anonymity, evidence := extractIntelligence([]byte(body), baseline); anonymity != "anonymous" || len(evidence) != 1 {
+			t.Fatalf("%s: anonymity=%q evidence=%v", header, anonymity, evidence)
+		}
+	}
+}
+
+func TestCancelledProxyHasNoVerdict(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Repeat = 3
+	cfg.RetryBackoff = time.Minute
+	cfg.Targets = []string{"https://example.com/"}
+	c := NewChecker(cfg)
+	c.Policy.Resolver = fixedResolver{ips: []netip.Addr{netip.MustParseAddr("93.184.216.34")}}
+	ctx, cancel := context.WithCancel(context.Background())
+	c.Connector.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		time.AfterFunc(10*time.Millisecond, cancel)
+		return nil, errors.New("refused")
+	}
+	result := c.Check(ctx, model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	if result.Status != model.StatusInterrupted {
+		t.Fatalf("status=%s attempts=%d", result.Status, result.Attempts)
+	}
+}
+
+func TestPrivateGatewayBlockedByDefault(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	cfg := config.Defaults()
+	cfg.Repeat = 3
+	c := NewChecker(cfg)
+	c.Policy.Resolver = fixedResolver{ips: []netip.Addr{netip.MustParseAddr("93.184.216.34")}}
+	address := listener.Addr().(*net.TCPAddr)
+	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "127.0.0.1", Port: uint16(address.Port)})
+	if result.Status != model.StatusPolicyBlock || result.Attempts != 1 || result.Observations[0].Code != "proxy_gateway_blocked" {
+		t.Fatalf("status=%s attempts=%d observations=%+v", result.Status, result.Attempts, result.Observations)
+	}
+}
+
+func TestOversizedRemoteDiagnosticIsBounded(t *testing.T) {
+	observation := finishError(model.Observation{}, time.Now(), &protocol.Error{Code: "x", Detail: strings.Repeat("y", 8192)})
+	if len(observation.Message) > model.MaxMessageBytes {
+		t.Fatalf("message has %d bytes", len(observation.Message))
 	}
 }

@@ -221,10 +221,25 @@ func HTTPProxyAuthError(resp *http.Response, supplied bool) error {
 				names = append(names, name)
 			}
 			sort.Strings(names)
+			names = boundedSchemes(names)
 			return &Error{Stage: model.StageNegotiate, Status: model.StatusAuthFailed, Code: "proxy_auth_unsupported", Detail: "HTTP proxy requires unsupported authentication scheme(s): " + strings.Join(names, ",")}
 		}
 	}
 	return &Error{Stage: model.StageNegotiate, Status: model.StatusAuthFailed, Code: "proxy_auth_rejected", Detail: "HTTP proxy rejected the supplied credentials"}
+}
+
+// boundedSchemes limits text chosen by the remote proxy. One oversized scheme
+// must not be able to fail history persistence for an entire run.
+func boundedSchemes(names []string) []string {
+	if len(names) > maxReportedAuthSchemes {
+		names = names[:maxReportedAuthSchemes]
+	}
+	for index, name := range names {
+		if len(name) > maxAuthSchemeBytes {
+			names[index] = name[:maxAuthSchemeBytes] + "..."
+		}
+	}
+	return names
 }
 
 func proxyAuthSchemes(challenges []string) map[string]struct{} {
@@ -268,6 +283,11 @@ type readerConn struct {
 func (c *readerConn) Read(p []byte) (int, error) { return c.r.Read(p) }
 
 var errHeaderLimit = errors.New("HTTP response headers exceed limit")
+
+const (
+	maxReportedAuthSchemes = 8
+	maxAuthSchemeBytes     = 32
+)
 
 type headerLimitReader struct {
 	r         io.Reader
@@ -543,6 +563,12 @@ func socks5ReplyStatus(reply byte) model.Status {
 }
 
 func classifyNet(stage model.Stage, code string, err error) error {
+	if errors.Is(err, policy.ErrGatewayBlocked) {
+		return &Error{Stage: model.StagePolicy, Status: model.StatusPolicyBlock, Code: "proxy_gateway_blocked", Detail: "proxy gateway uses a private or special-purpose address; authorize it with --allow-private-proxies", Err: err}
+	}
+	if localResourceExhausted(err) {
+		return &Error{Stage: stage, Status: model.StatusInconclusive, Code: "local_resource_exhausted", Detail: "this host ran out of sockets or file descriptors; lower concurrency or raise limits", Err: err}
+	}
 	status := model.StatusFailed
 	if errors.Is(err, context.Canceled) {
 		status = model.StatusInterrupted
@@ -578,6 +604,30 @@ func classifyNet(stage model.Stage, code string, err error) error {
 		code = "proxy_dns"
 	}
 	return &Error{Stage: stage, Status: status, Code: code, Detail: safeNetMessage(err), Err: err}
+}
+
+// localResourceExhausted separates failures of this host from failures of the
+// proxy, so exhausted descriptors are never reported as a dead proxy.
+func localResourceExhausted(err error) bool {
+	for _, target := range []syscall.Errno{syscall.EMFILE, syscall.ENFILE, syscall.ENOBUFS, syscall.ENOMEM, syscall.EADDRNOTAVAIL} {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
+}
+
+// GatewayGuard is a dialer control hook. It inspects the address actually being
+// connected, so hostnames cannot resolve around the check.
+func GatewayGuard(_ context.Context, _, address string, _ syscall.RawConn) error {
+	endpoint, err := netip.ParseAddrPort(address)
+	if err != nil {
+		return fmt.Errorf("parse gateway address: %w", err)
+	}
+	if policy.IsUnsafe(endpoint.Addr()) {
+		return policy.ErrGatewayBlocked
+	}
+	return nil
 }
 
 func safeNetMessage(err error) string {

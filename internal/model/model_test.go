@@ -56,3 +56,39 @@ func TestBinaryIdentityMatchesPublicKey(t *testing.T) {
 		t.Fatal("public identity leaked credential-dependent information")
 	}
 }
+
+func TestResultIDSeparatesAccountsOnOneGateway(t *testing.T) {
+	key := func() []byte { return []byte("local secret") }
+	base := Proxy{Protocol: ProtocolHTTP, Host: "gateway.test", Port: 8000}
+	first, second := base, base
+	first.Credentials = &Credentials{Username: "session-1", Password: "pw"}
+	second.Credentials = &Credentials{Username: "session-2", Password: "pw"}
+	if first.ResultID(key) == second.ResultID(key) {
+		t.Fatal("two accounts on one gateway share a result ID")
+	}
+	if first.ResultID(key) != first.ResultID(key) {
+		t.Fatal("result ID is not stable")
+	}
+	if base.ResultID(key) != base.Key() {
+		t.Fatal("credential-free proxies must keep their endpoint identity")
+	}
+	if first.ResultID(nil) != first.Key() {
+		t.Fatal("a missing key must fall back to the endpoint identity")
+	}
+	if first.ResultID(func() []byte { return []byte("other secret") }) == first.ResultID(key) {
+		t.Fatal("result ID does not depend on the local key")
+	}
+}
+
+func TestBoundedMessageLimitsAndCleans(t *testing.T) {
+	long := BoundedMessage(strings.Repeat("é", MaxMessageBytes))
+	if len(long) > MaxMessageBytes || strings.ContainsRune(long, '�') {
+		t.Fatalf("oversized or split rune: %d bytes", len(long))
+	}
+	if cleaned := BoundedMessage("a\x1b]0;x\x07b\r\nc"); strings.ContainsAny(cleaned, "\x1b\x07\r\n") {
+		t.Fatalf("control characters survived: %q", cleaned)
+	}
+	if short := BoundedMessage("plain text"); short != "plain text" {
+		t.Fatalf("short message changed: %q", short)
+	}
+}

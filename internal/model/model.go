@@ -1,6 +1,7 @@
 package model
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/hex"
@@ -10,11 +11,17 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 )
 
 type Protocol string
 
-const SchemaVersion = 5
+const SchemaVersion = 6
+
+// MaxMessageBytes bounds every persisted diagnostic. Messages can quote values
+// chosen by a remote proxy, so the bound must hold before results reach storage.
+const MaxMessageBytes = 512
 
 const (
 	ProtocolAuto    Protocol = "auto"
@@ -74,6 +81,41 @@ func (p Proxy) FullURI() string {
 func (p Proxy) Key() string {
 	id := p.EndpointIdentity()
 	return hex.EncodeToString(id[:])
+}
+
+// ResultID distinguishes accounts that share one gateway. Commercial pools list
+// a single endpoint with many credentials, so an endpoint-only identity would
+// collapse them into one result across resume, merge, and history. The keyed
+// hash keeps low-entropy credentials from being recoverable from saved IDs.
+func (p Proxy) ResultID(key func() []byte) string {
+	if p.Credentials == nil || key == nil {
+		return p.Key()
+	}
+	identity := p.EndpointIdentity()
+	mac := hmac.New(sha256.New, key())
+	mac.Write(identity[:])
+	mac.Write([]byte(p.Credentials.Username))
+	mac.Write([]byte{0})
+	mac.Write([]byte(p.Credentials.Password))
+	var sum [sha256.Size]byte
+	return hex.EncodeToString(mac.Sum(sum[:0])[:12])
+}
+
+// BoundedMessage makes a diagnostic safe to persist and display.
+func BoundedMessage(message string) string {
+	if len(message) > MaxMessageBytes {
+		cut := MaxMessageBytes
+		for cut > 0 && !utf8.RuneStart(message[cut]) {
+			cut--
+		}
+		message = message[:cut]
+	}
+	return strings.Map(func(r rune) rune {
+		if r == utf8.RuneError || unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, message)
 }
 
 func (p Proxy) Identity() [12]byte {
@@ -144,6 +186,7 @@ const (
 
 type Timings struct {
 	DNSMS      float64 `json:"dns_ms,omitempty"`
+	QueueMS    float64 `json:"queue_ms,omitempty"`
 	ConnectMS  float64 `json:"connect_ms,omitempty"`
 	ProxyTLSMS float64 `json:"proxy_tls_ms,omitempty"`
 	TunnelMS   float64 `json:"tunnel_ms,omitempty"`
@@ -299,6 +342,7 @@ type RunConfiguration struct {
 	StopOnSuccess     bool     `json:"stop_on_success"`
 	RetryPermanent    bool     `json:"retry_permanent_failures"`
 	AllowRemoteDNS    bool     `json:"allow_remote_dns"`
+	AllowPrivateProxy bool     `json:"allow_private_proxies,omitempty"`
 	ProxyDNSCacheTTL  string   `json:"proxy_dns_cache_ttl,omitempty"`
 	MaxResponseBytes  int64    `json:"max_response_bytes"`
 	IntelligenceBytes int64    `json:"intelligence_body_bytes"`

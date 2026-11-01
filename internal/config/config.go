@@ -58,6 +58,7 @@ type Config struct {
 	ScenarioName      string                   `json:"-"`
 	AllowPrivate      bool                     `json:"allow_private_targets"`
 	AllowRemoteDNS    bool                     `json:"allow_remote_dns"`
+	AllowPrivateProxy bool                     `json:"allow_private_proxies"`
 	RetryPermanent    bool                     `json:"retry_permanent_failures"`
 	StopOnSuccess     bool                     `json:"stop_on_success"`
 	RetryBackoff      time.Duration            `json:"-"`
@@ -126,6 +127,9 @@ func Defaults() Config {
 }
 
 func defaultDataDir() string {
+	if d := os.Getenv("NETVEX_DATA_DIR"); d != "" {
+		return d
+	}
 	if d, err := os.UserConfigDir(); err == nil {
 		return filepath.Join(d, "netvex")
 	}
@@ -214,6 +218,7 @@ func applyEnv(c *Config) error {
 	}{
 		{"NETVEX_ALLOW_PRIVATE_TARGETS", &c.AllowPrivate},
 		{"NETVEX_ALLOW_REMOTE_DNS", &c.AllowRemoteDNS},
+		{"NETVEX_ALLOW_PRIVATE_PROXIES", &c.AllowPrivateProxy},
 		{"NETVEX_RETRY_PERMANENT_FAILURES", &c.RetryPermanent},
 		{"NETVEX_STOP_ON_SUCCESS", &c.StopOnSuccess},
 		{"NETVEX_SAVE", &c.Save},

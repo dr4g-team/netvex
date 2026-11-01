@@ -23,6 +23,18 @@ import (
 	"github.com/drag-team/netvex/internal/store"
 )
 
+// TestMain keeps tests away from the developer's real data directory.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "netvex-cli-test-")
+	if err != nil {
+		panic(err)
+	}
+	os.Setenv("NETVEX_DATA_DIR", dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
 func run(args []string, in string) (int, string, string) {
 	var out, err bytes.Buffer
 	c := CLI{Stdout: &out, Stderr: &err, Stdin: strings.NewReader(in)}
@@ -152,7 +164,7 @@ func TestCheckEndToEndThroughControlledConnectProxy(t *testing.T) {
 		<-requestDone
 	}()
 
-	code, stdout, stderr := run([]string{"check", "--profile", "fast", "--protocol", "http", "--format", "jsonl", "--allow-private-targets", "--target", target.URL}, listener.Addr().String()+"\n")
+	code, stdout, stderr := run([]string{"check", "--profile", "fast", "--protocol", "http", "--format", "jsonl", "--allow-private-targets", "--allow-private-proxies", "--target", target.URL}, listener.Addr().String()+"\n")
 	if code != ExitOK {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}

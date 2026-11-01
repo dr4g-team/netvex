@@ -31,3 +31,18 @@ func TestScoreRequiresRepeatedEvidence(t *testing.T) {
 		t.Fatalf("%+v", got)
 	}
 }
+
+func TestSingleMeasurementKeepsLatencyWithoutNumericScore(t *testing.T) {
+	ok := model.Observation{Status: model.StatusOK, Timings: model.Timings{TotalMS: 240}}
+	result := Calculate([]model.Observation{ok})
+	if result.Value != nil || result.Confidence != "insufficient" {
+		t.Fatalf("single sample produced a score: %+v", result)
+	}
+	if result.MedianMS != 240 {
+		t.Fatalf("median=%v", result.MedianMS)
+	}
+	failed := Calculate([]model.Observation{{Status: model.StatusFailed}})
+	if failed.MedianMS != 0 {
+		t.Fatalf("failed attempt reported latency: %+v", failed)
+	}
+}

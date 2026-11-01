@@ -12,6 +12,7 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -692,5 +693,47 @@ func BenchmarkReadResponseLimited(b *testing.B) {
 		}
 		_, _ = io.Copy(io.Discard, response.Body)
 		_ = response.Body.Close()
+	}
+}
+
+func TestProxyAuthDiagnosticIsBounded(t *testing.T) {
+	challenges := []string{}
+	for index := range 40 {
+		challenges = append(challenges, fmt.Sprintf("%s%d realm=x", strings.Repeat("a", 4000), index))
+	}
+	response := &http.Response{Header: http.Header{"Proxy-Authenticate": challenges}}
+	err := HTTPProxyAuthError(response, true)
+	if len(err.Error()) > 512 {
+		t.Fatalf("diagnostic has %d bytes", len(err.Error()))
+	}
+}
+
+func TestLocalResourceExhaustionIsNotAProxyFailure(t *testing.T) {
+	for _, cause := range []error{syscall.EMFILE, syscall.ENFILE, syscall.ENOBUFS, syscall.ENOMEM, syscall.EADDRNOTAVAIL} {
+		var classified *Error
+		if !errors.As(classifyNet(model.StageConnect, "proxy_connect", fmt.Errorf("dial: %w", cause)), &classified) {
+			t.Fatal("unclassified error")
+		}
+		if classified.Status != model.StatusInconclusive || classified.Code != "local_resource_exhausted" {
+			t.Fatalf("%v classified as %+v", cause, classified)
+		}
+	}
+}
+
+func TestGatewayGuardChecksConnectedAddress(t *testing.T) {
+	for _, address := range []string{"127.0.0.1:8080", "10.0.0.1:80", "169.254.169.254:80", "[::1]:1080", "[fe80::1]:80", "100.64.0.1:3128", "[::ffff:192.168.0.1]:80"} {
+		if err := GatewayGuard(context.Background(), "tcp4", address, nil); !errors.Is(err, policy.ErrGatewayBlocked) {
+			t.Fatalf("%s: %v", address, err)
+		}
+	}
+	if err := GatewayGuard(context.Background(), "tcp4", "8.8.8.8:8080", nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := GatewayGuard(context.Background(), "tcp4", "not-an-address", nil); err == nil {
+		t.Fatal("unparseable address accepted")
+	}
+	var classified *Error
+	if !errors.As(classifyNet(model.StageConnect, "proxy_connect", fmt.Errorf("dial: %w", policy.ErrGatewayBlocked)), &classified) || classified.Status != model.StatusPolicyBlock || classified.Stage != model.StagePolicy {
+		t.Fatalf("classified=%+v", classified)
 	}
 }

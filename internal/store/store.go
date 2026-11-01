@@ -192,7 +192,11 @@ func ReadResults(path string, emit func(model.Result) error) error {
 		return fmt.Errorf("open run: %w", err)
 	}
 	defer f.Close()
-	s := bufio.NewScanner(f)
+	return decodeResults(f, emit)
+}
+
+func decodeResults(reader io.Reader, emit func(model.Result) error) error {
+	s := bufio.NewScanner(reader)
 	s.Buffer(make([]byte, 64<<10), MaxResultBytes)
 	line := 0
 	for s.Scan() {

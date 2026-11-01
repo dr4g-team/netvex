@@ -9,7 +9,15 @@ import (
 	"os"
 	"strings"
 	"unicode"
+
+	"github.com/drag-team/netvex/internal/model"
 )
+
+// CheckpointEntry is what a resumed run needs to know about a finished proxy.
+type CheckpointEntry struct {
+	Status   model.Status
+	Protocol model.Protocol
+}
 
 type Checkpoint struct {
 	file      *os.File
@@ -18,11 +26,11 @@ type Checkpoint struct {
 	pending   int
 }
 
-func OpenCheckpoint(path string, resume, force bool, syncEvery int, maxResults int) (*Checkpoint, map[string]struct{}, error) {
+func OpenCheckpoint(path string, resume, force bool, syncEvery int, maxResults int) (*Checkpoint, map[string]CheckpointEntry, error) {
 	if syncEvery < 1 || syncEvery > 100_000 {
 		return nil, nil, errors.New("checkpoint sync interval is outside safe bounds")
 	}
-	completed := make(map[string]struct{})
+	completed := make(map[string]CheckpointEntry)
 	info, statErr := os.Lstat(path)
 	if statErr == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
@@ -38,7 +46,9 @@ func OpenCheckpoint(path string, resume, force bool, syncEvery int, maxResults i
 	}
 	flags := os.O_CREATE | os.O_WRONLY
 	if resume {
-		flags = os.O_RDWR | os.O_APPEND
+		// Not O_APPEND: on Windows that opens the handle without the write access
+		// truncation needs, and the exclusive lock already makes this the only writer.
+		flags = os.O_RDWR
 	} else if !force {
 		flags |= os.O_EXCL
 	}
@@ -94,10 +104,12 @@ func OpenCheckpoint(path string, resume, force bool, syncEvery int, maxResults i
 }
 
 type modelResult struct {
-	ID string `json:"id"`
+	ID       string         `json:"id"`
+	Status   model.Status   `json:"status"`
+	Protocol model.Protocol `json:"protocol"`
 }
 
-func readCheckpointIDs(path string, maxResults int) (map[string]struct{}, error) {
+func readCheckpointIDs(path string, maxResults int) (map[string]CheckpointEntry, error) {
 	file, err := openNoFollow(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
@@ -106,8 +118,8 @@ func readCheckpointIDs(path string, maxResults int) (map[string]struct{}, error)
 	return scanCheckpointIDs(file, maxResults)
 }
 
-func scanCheckpointIDs(reader io.Reader, maxResults int) (map[string]struct{}, error) {
-	completed := make(map[string]struct{})
+func scanCheckpointIDs(reader io.Reader, maxResults int) (map[string]CheckpointEntry, error) {
+	completed := make(map[string]CheckpointEntry)
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 64<<10), MaxResultBytes)
 	count := 0
@@ -123,7 +135,10 @@ func scanCheckpointIDs(reader io.Reader, maxResults int) (map[string]struct{}, e
 		if result.ID == "" || len(result.ID) > 128 || strings.IndexFunc(result.ID, unicode.IsControl) >= 0 {
 			return nil, fmt.Errorf("checkpoint line %d has an invalid result ID", count)
 		}
-		completed[result.ID] = struct{}{}
+		// An interrupted record has no verdict, so the proxy stays pending.
+		if result.Status != model.StatusInterrupted {
+			completed[result.ID] = CheckpointEntry{Status: result.Status, Protocol: result.Protocol}
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
@@ -131,7 +146,31 @@ func scanCheckpointIDs(reader io.Reader, maxResults int) (map[string]struct{}, e
 	return completed, nil
 }
 
-func (c *Checkpoint) Write(result any) error {
+// Replay emits every finished result. It reads through the handle holding the
+// exclusive lock because Windows locks are mandatory: a second handle would fail
+// with a lock violation, which broke resume on that platform.
+func (c *Checkpoint) Replay(emit func(model.Result) error) error {
+	if err := c.Sync(); err != nil {
+		return err
+	}
+	if _, err := c.file.Seek(0, io.SeekStart); err != nil {
+		return fmt.Errorf("seek checkpoint: %w", err)
+	}
+	if err := decodeResults(c.file, func(result model.Result) error {
+		if result.Status == model.StatusInterrupted {
+			return nil
+		}
+		return emit(result)
+	}); err != nil {
+		return err
+	}
+	if _, err := c.file.Seek(0, io.SeekEnd); err != nil {
+		return fmt.Errorf("seek checkpoint end: %w", err)
+	}
+	return nil
+}
+
+func (c *Checkpoint) Write(result model.Result) error {
 	data, err := json.Marshal(result)
 	if err != nil {
 		return err

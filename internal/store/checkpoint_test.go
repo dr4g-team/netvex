@@ -91,3 +91,93 @@ func TestCheckpointRejectsConcurrentWriter(t *testing.T) {
 		t.Fatal("concurrent checkpoint writer accepted")
 	}
 }
+
+func TestInterruptedRecordsStayPendingAndFinalVerdictWins(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "checkpoint.jsonl")
+	checkpoint, _, err := OpenCheckpoint(path, false, false, 1, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	records := []model.Result{
+		{ID: "done", Status: model.StatusFailed},
+		{ID: "again", Status: model.StatusInterrupted},
+		{ID: "pending", Status: model.StatusInterrupted},
+		{ID: "again", Status: model.StatusOK, Protocol: model.ProtocolSOCKS5},
+	}
+	for _, record := range records {
+		if err := checkpoint.Write(record); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := checkpoint.Close(); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint, completed, err := OpenCheckpoint(path, true, false, 1, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer checkpoint.Close()
+	if _, ok := completed["pending"]; ok || len(completed) != 2 {
+		t.Fatalf("completed=%v", completed)
+	}
+	if entry := completed["again"]; entry.Status != model.StatusOK || entry.Protocol != model.ProtocolSOCKS5 {
+		t.Fatalf("entry=%+v", entry)
+	}
+	var replayed []string
+	if err := checkpoint.Replay(func(result model.Result) error {
+		replayed = append(replayed, result.ID)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(replayed) != 2 || replayed[0] != "done" || replayed[1] != "again" {
+		t.Fatalf("replayed=%v", replayed)
+	}
+	if err := checkpoint.Write(model.Result{ID: "after", Status: model.StatusOK}); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkpoint.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ids, err := readCheckpointIDs(path, 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ids["after"]; !ok {
+		t.Fatalf("write after replay was lost: %v", ids)
+	}
+}
+
+func TestIdentityKeyIsStablePrivateAndValidated(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "nested")
+	first, err := LoadIdentityKey(dir)
+	if err != nil || len(first) != identityKeyBytes {
+		t.Fatalf("key=%d err=%v", len(first), err)
+	}
+	second, err := LoadIdentityKey(dir)
+	if err != nil || string(first) != string(second) {
+		t.Fatalf("key changed: err=%v", err)
+	}
+	path := filepath.Join(dir, "identity.key")
+	if runtime.GOOS != "windows" {
+		info, err := os.Stat(path)
+		if err != nil || info.Mode().Perm() != 0600 {
+			t.Fatalf("mode=%v err=%v", info, err)
+		}
+		if err := os.Chmod(path, 0644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := LoadIdentityKey(dir); err == nil {
+			t.Fatal("readable identity key accepted")
+		}
+		if err := os.Chmod(path, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(path, []byte("short"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadIdentityKey(dir); err == nil {
+		t.Fatal("truncated identity key accepted")
+	}
+}

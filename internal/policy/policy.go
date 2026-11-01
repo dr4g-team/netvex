@@ -21,6 +21,7 @@ type Resolver interface {
 var (
 	ErrBlocked         = errors.New("destination blocked")
 	ErrResolve         = errors.New("destination resolution failed")
+	ErrGatewayBlocked  = errors.New("proxy gateway blocked")
 	unsafeIPv4Prefixes = [...]netip.Prefix{
 		netip.MustParsePrefix("0.0.0.0/8"),
 		netip.MustParsePrefix("100.64.0.0/10"),

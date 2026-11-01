@@ -28,7 +28,13 @@ func Calculate(obs []model.Observation) model.Score {
 		confidence = "high"
 	}
 	if len(obs) < 2 {
-		return model.Score{Confidence: "insufficient", Reason: "at least two measurements are required for a numeric score", SuccessRate: rate}
+		// The value needs two samples, but the latency is still a measurement:
+		// without it --max-latency would filter nothing in single-sample runs.
+		single := model.Score{Confidence: "insufficient", Reason: "at least two measurements are required for a numeric score", SuccessRate: rate}
+		if successes == 1 {
+			single.MedianMS = latencies[0]
+		}
+		return single
 	}
 	if successes == 0 {
 		z := 0.0
