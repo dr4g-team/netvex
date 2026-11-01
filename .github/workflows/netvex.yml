@@ -1,0 +1,349 @@
+name: NetVex
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "17 4 * * 1"
+    - cron: "41 3 * * 2"
+  workflow_dispatch:
+    inputs:
+      fuzz:
+        description: Run every fuzz target for five minutes
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+env:
+  GO_RELEASE_VERSION: "1.27.3"
+  GOTOOLCHAIN: local
+
+concurrency:
+  group: netvex-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    name: Go ${{ matrix.go }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        go: ["1.26.x", stable]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+      - name: Verify formatting
+        run: make fmt-check
+      - name: Run tests
+        run: scripts/go-test-annotated.sh
+      - name: Run static analysis
+        run: make vet
+      - name: Build static binary
+        run: make build
+      - name: Verify reproducible binary
+        if: matrix.go == 'stable'
+        run: make reproducibility-check
+      - name: Run race detector
+        if: matrix.go == 'stable'
+        run: make race
+
+  security:
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    name: Static analysis and vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - name: Run staticcheck
+        run: make lint
+      - name: Run govulncheck
+        run: make vuln
+      - name: Enforce coverage floor
+        run: make cover
+
+  native-platforms:
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    name: Native ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu ARM64
+            runner: ubuntu-24.04-arm
+          - name: macOS ARM64
+            runner: macos-15
+          - name: Windows x64
+            runner: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - name: Run tests
+        shell: bash
+        run: scripts/go-test-annotated.sh
+      - name: Run static analysis
+        run: go vet ./...
+      - name: Build executable
+        run: go build -mod=readonly -trimpath -buildvcs=false ./cmd/netvex
+
+  cross-build:
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    name: Cross-build ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {goos: linux, goarch: amd64}
+          - {goos: linux, goarch: "386"}
+          - {goos: linux, goarch: arm, goarm: "7"}
+          - {goos: linux, goarch: arm64}
+          - {goos: linux, goarch: riscv64}
+          - {goos: darwin, goarch: amd64}
+          - {goos: darwin, goarch: arm64}
+          - {goos: windows, goarch: amd64}
+          - {goos: windows, goarch: arm64}
+          - {goos: freebsd, goarch: amd64}
+          - {goos: freebsd, goarch: arm64}
+          - {goos: openbsd, goarch: amd64}
+          - {goos: netbsd, goarch: amd64}
+          - {goos: dragonfly, goarch: amd64}
+          - {goos: illumos, goarch: amd64}
+          - {goos: solaris, goarch: amd64}
+          - {goos: aix, goarch: ppc64}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - name: Compile application and tests
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          GOARM_VALUE: ${{ matrix.goarm }}
+        run: |
+          if test -n "${GOARM_VALUE}"; then export GOARM="${GOARM_VALUE}"; fi
+          go build -mod=readonly -trimpath -buildvcs=false ./cmd/netvex
+          go test -exec=/bin/true ./...
+
+  codeql:
+    if: ${{ github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main') || github.event.schedule == '17 4 * * 1' }}
+    name: CodeQL
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: go
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - run: make build
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+
+  fuzz:
+    if: ${{ github.event.schedule == '41 3 * * 2' || (github.event_name == 'workflow_dispatch' && inputs.fuzz) }}
+    name: Fuzz parsers and protocols
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - name: Run every fuzz target
+        run: make fuzz FUZZTIME=5m
+
+  release-verify:
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    name: Verify release
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_RELEASE_VERSION }}
+          cache: false
+      - name: Validate release metadata
+        run: |
+          [[ "${GITHUB_REF_NAME}" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]
+          version="${GITHUB_REF_NAME#v}"
+          test "$(cat VERSION)" = "${version}"
+          grep -Fq "## [${version}]" CHANGELOG.md
+          git cat-file -t "${GITHUB_REF_NAME}" | grep -qx tag
+          test "$(git rev-parse HEAD)" = "$(git rev-list -n 1 "${GITHUB_REF_NAME}")"
+      - name: Verify source
+        run: make check
+      - name: Run staticcheck and govulncheck
+        run: |
+          make lint
+          make vuln
+
+  release-build:
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: release-verify
+    name: Release ${{ matrix.os }}/${{ matrix.arch }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: linux, arch: amd64, format: tar.gz}
+          - {os: linux, arch: "386", format: tar.gz}
+          - {os: linux, arch: armv7, goarch: arm, goarm: "7", format: tar.gz}
+          - {os: linux, arch: arm64, format: tar.gz}
+          - {os: linux, arch: riscv64, format: tar.gz}
+          - {os: darwin, arch: amd64, format: tar.gz}
+          - {os: darwin, arch: arm64, format: tar.gz}
+          - {os: windows, arch: amd64, format: zip}
+          - {os: windows, arch: arm64, format: zip}
+          - {os: freebsd, arch: amd64, format: tar.gz}
+          - {os: freebsd, arch: arm64, format: tar.gz}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: ${{ env.GO_RELEASE_VERSION }}
+          cache: false
+      - name: Build archive
+        env:
+          ARCH: ${{ matrix.arch }}
+          OS: ${{ matrix.os }}
+          FORMAT: ${{ matrix.format }}
+          GOARCH_VALUE: ${{ matrix.goarch }}
+          GOARM_VALUE: ${{ matrix.goarm }}
+          VERSION: ${{ github.ref_name }}
+          COMMIT: ${{ github.sha }}
+        run: |
+          version="${VERSION#v}"
+          package="netvex-${VERSION}-${OS}-${ARCH}"
+          binary="netvex"
+          if test "${OS}" = windows; then binary="netvex.exe"; fi
+          mkdir -p "dist/${package}"
+          build_date="$(git show -s --format=%cI HEAD)"
+          target_arch="${GOARCH_VALUE:-${ARCH}}"
+          if test -n "${GOARM_VALUE}"; then export GOARM="${GOARM_VALUE}"; fi
+          CGO_ENABLED=0 GOOS="${OS}" GOARCH="${target_arch}" go build -mod=readonly -trimpath -buildvcs=false -ldflags "-s -w -X github.com/drag-team/netvex/internal/buildinfo.Version=${version} -X github.com/drag-team/netvex/internal/buildinfo.Commit=${COMMIT} -X github.com/drag-team/netvex/internal/buildinfo.Date=${build_date}" -o "dist/${package}/${binary}" ./cmd/netvex
+          cp README.md LICENSE CHANGELOG.md "dist/${package}/"
+          if test "${FORMAT}" = zip; then
+            cd dist
+            python3 -m zipfile -c "${package}.zip" "${package}"
+          else
+            tar -C dist -czf "dist/${package}.tar.gz" "${package}"
+            cd dist
+          fi
+          sha256sum "${package}.${FORMAT}" > "${package}.${FORMAT}.sha256"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: netvex-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.sha256
+          if-no-files-found: error
+
+  release-publish:
+    if: ${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}
+    needs: release-build
+    name: Publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Generate SPDX software bill of materials
+        env:
+          COMMIT: ${{ github.sha }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          python3 scripts/sbom.py --version "${VERSION#v}" --commit "${COMMIT}" --go-version "${GO_RELEASE_VERSION}" \
+            --output "dist/netvex-${VERSION}.spdx.json" dist/*.tar.gz dist/*.zip
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.spdx.json
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${GITHUB_REF_NAME}" dist/* --verify-tag --generate-notes --title "NetVex ${GITHUB_REF_NAME}"
+
+  cleanup-old-runs:
+    if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' && contains(github.event.head_commit.message, '[reset-actions-history]') && needs.verify.result == 'success' && needs.security.result == 'success' && needs.native-platforms.result == 'success' && needs.cross-build.result == 'success' && needs.codeql.result == 'success' }}
+    needs: [verify, security, native-platforms, cross-build, codeql]
+    name: Remove superseded workflow runs
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    steps:
+      - name: Keep only this run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api --paginate "/repos/${GITHUB_REPOSITORY}/actions/runs?per_page=100" \
+            --jq '.workflow_runs[] | select(.status == "completed") | .id' |
+          while read -r run_id; do
+            test "${run_id}" = "${GITHUB_RUN_ID}" || gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}"
+          done

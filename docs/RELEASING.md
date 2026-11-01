@@ -42,9 +42,9 @@ git push origin main
 git push origin "v${version}"
 ```
 
-The pushed tag triggers `.github/workflows/release.yml`. A failed workflow must
-be fixed and rerun; release artifacts must not be assembled manually from an
-unverified working tree.
+The pushed tag triggers the release jobs in `.github/workflows/netvex.yml`. A
+failed workflow must be fixed and rerun; release artifacts must not be assembled
+manually from an unverified working tree.
 
 ## Verify
 

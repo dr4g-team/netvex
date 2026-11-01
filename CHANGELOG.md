@@ -6,6 +6,19 @@ All notable changes to NetVex are documented in this file. The project follows
 
 ## [Unreleased]
 
+### Changed
+
+- CI, native portability, CodeQL, scheduled fuzzing, and release publication
+  now share one event-aware GitHub Actions workflow instead of four independent
+  definitions.
+
+### Fixed
+
+- Branch, tag, scheduled, and manual events now select only their relevant jobs,
+  preventing ordinary CI from accidentally entering release or fuzzing paths.
+- The first successful consolidated run performs the requested one-time cleanup
+  of superseded Actions runs; later runs retain normal audit history.
+
 ## [1.0.0] - 2026-11-01
 
 ### Added
