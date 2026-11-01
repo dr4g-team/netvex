@@ -736,6 +736,9 @@ func (c *Checker) resolve(ctx context.Context, target string) (policy.Destinatio
 	if c.Config.DNSCacheTTL == 0 {
 		return c.Policy.Resolve(ctx, target)
 	}
+	if err := ctx.Err(); err != nil {
+		return policy.Destination{}, err
+	}
 	for {
 		c.resolveMu.Lock()
 		entry := c.resolved[target]
@@ -747,16 +750,14 @@ func (c *Checker) resolve(ctx context.Context, target string) (policy.Destinatio
 			entry = &resolveEntry{done: make(chan struct{})}
 			c.resolved[target] = entry
 			c.resolveMu.Unlock()
-			dest, err := c.Policy.Resolve(ctx, target)
-			c.resolveMu.Lock()
-			entry.dest, entry.err = dest, err
-			entry.expires = time.Now().Add(c.Config.DNSCacheTTL)
-			close(entry.done)
-			if err != nil {
-				delete(c.resolved, target)
+			lookupCtx, cancel := c.detachedResolveContext(ctx)
+			go c.resolveTarget(lookupCtx, cancel, target, entry)
+			select {
+			case <-entry.done:
+				return entry.dest, entry.err
+			case <-ctx.Done():
+				return policy.Destination{}, ctx.Err()
 			}
-			c.resolveMu.Unlock()
-			return dest, err
 		}
 		done := entry.done
 		c.resolveMu.Unlock()
@@ -767,6 +768,31 @@ func (c *Checker) resolve(ctx context.Context, target string) (policy.Destinatio
 			return policy.Destination{}, ctx.Err()
 		}
 	}
+}
+
+func (c *Checker) detachedResolveContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(base, deadline)
+	}
+	timeout := c.Config.RequestTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	return context.WithTimeout(base, timeout)
+}
+
+func (c *Checker) resolveTarget(ctx context.Context, cancel context.CancelFunc, target string, entry *resolveEntry) {
+	defer cancel()
+	dest, err := c.Policy.Resolve(ctx, target)
+	c.resolveMu.Lock()
+	entry.dest, entry.err = dest, err
+	entry.expires = time.Now().Add(c.Config.DNSCacheTTL)
+	close(entry.done)
+	if err != nil && c.resolved[target] == entry {
+		delete(c.resolved, target)
+	}
+	c.resolveMu.Unlock()
 }
 
 func errorPriority(err error) int {

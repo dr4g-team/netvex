@@ -23,7 +23,7 @@ It is not represented as a completed independent security audit.
 - HTTP, TLS-encrypted HTTPS proxy, HTTP CONNECT, SOCKS4, SOCKS4a, and SOCKS5
   fixtures, including authentication and failure classification.
 - Text, commercial colon format, reordered commercial CSV, JSON, JSONL, gzip,
-  multi-source, explicit stdin, deduplication, limits, and credential redaction.
+  UTF-8 BOM, multi-source, explicit stdin, deduplication, limits, and credential redaction.
 - Bounded concurrency, target pressure, rate, retries, timeouts, cancellation,
   safe redirects, DNS policy, bounded multi-address fallback, response
   assertions, and transfer measurements.
@@ -47,11 +47,13 @@ It is not represented as a completed independent security audit.
 ## Verification record
 
 - `make check`: passed (`go vet`, all unit/integration tests, race detector).
-- Parser fuzzing: 118,739 executions in 10 seconds with no failure.
-- HTTP response fuzzing: 105,011 executions in 10 seconds covering valid,
+- Proxy parser fuzzing: 345,419 executions in 10 seconds with no failure.
+- Structured CSV/JSON/JSONL/auto fuzzing: 245,503 executions in 10 seconds
+  with no failure.
+- HTTP response fuzzing: 209,054 executions in 10 seconds covering valid,
   truncated, malformed, and oversized inputs with no failure.
-- Package coverage: core packages range from 46.1% to 100%; engine 74.2%,
-  protocol 80.8%, input 80.3%, policy 85.7%, and metadata 81.1%.
+- Package coverage: core packages range from 46.1% to 100%; engine 74.4%,
+  protocol 82.7%, input 84.3%, policy 91.5%, and metadata 81.1%.
 - Controlled 500,000-item scheduler: 910,336 items/s median at concurrency 128
   across three runs on the non-isolated delivery host.
 - Offline IPv4 metadata lookup: 411 ns/op median, zero allocations across three
@@ -74,6 +76,8 @@ It is not represented as a completed independent security audit.
   memory fell from about 140 KiB to 66 KiB and allocations from 16 to 8.
 - Proxy DNS cache hits measured 524 ns/op median; buffered serializers measured
   301 ns/result for TXT, 3.50 us for JSONL, and 1.91 us for CSV.
+- Expanded destination range policy checks measured 146.5 ns/op median with
+  zero allocations, versus 1,003 ns/op before static address-family tables.
 
 The benchmark conditions and historical results are in
 [BENCHMARKS.md](BENCHMARKS.md). Controlled local fixtures are used instead of
@@ -103,6 +107,8 @@ make check
 make cross-check
 make reproducibility-check
 go test ./internal/input -run '^$' -fuzz '^FuzzParseProxy$' -fuzztime=10s
+go test ./internal/input -run '^$' -fuzz '^FuzzStructuredInput$' -fuzztime=10s
+go test ./internal/protocol -run '^$' -fuzz '^FuzzReadResponseLimited$' -fuzztime=10s
 make build
 ./bin/netvex version
 ./bin/netvex doctor

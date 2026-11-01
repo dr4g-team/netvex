@@ -150,6 +150,41 @@ func TestProxyDNSCacheHonorsCancellation(t *testing.T) {
 	close(resolver.release)
 }
 
+func TestProxyDNSCacheLeaderCancellationDoesNotFailWaiters(t *testing.T) {
+	resolver := &controlledProxyResolver{
+		addrs:   []netip.Addr{netip.MustParseAddr("1.1.1.1")},
+		started: make(chan struct{}), release: make(chan struct{}),
+	}
+	cache := NewProxyDNSCache(time.Minute, 8)
+	cache.Resolver = resolver
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, err := cache.Address(leaderCtx, "shared.test", 80)
+		leaderDone <- err
+	}()
+	<-resolver.started
+	waiterDone := make(chan error, 1)
+	go func() {
+		address, err := cache.Address(context.Background(), "shared.test", 80)
+		if err == nil && address != "1.1.1.1:80" {
+			err = errors.New("unexpected resolved address: " + address)
+		}
+		waiterDone <- err
+	}()
+	cancelLeader()
+	if err := <-leaderDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leader err=%v", err)
+	}
+	close(resolver.release)
+	if err := <-waiterDone; err != nil {
+		t.Fatalf("waiter err=%v", err)
+	}
+	if resolver.calls.Load() != 1 {
+		t.Fatalf("resolver calls=%d", resolver.calls.Load())
+	}
+}
+
 func TestProxyDNSUsesConnectDeadline(t *testing.T) {
 	resolver := &controlledProxyResolver{started: make(chan struct{}), release: make(chan struct{})}
 	cache := NewProxyDNSCache(time.Minute, 8)

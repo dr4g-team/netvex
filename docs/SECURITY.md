@@ -11,6 +11,11 @@ Default safeguards:
 - all DNS answers checked before use;
 - loopback, private, link-local, carrier-grade NAT, cloud metadata, reserved,
   documentation, multicast, and unspecified address ranges denied;
+- NAT64, 6to4, Teredo, discard-only, benchmarking, deprecated transition, and
+  other non-global ranges from the current IANA [IPv4](https://www.iana.org/assignments/iana-ipv4-special-registry/)
+  and [IPv6](https://www.iana.org/assignments/iana-ipv6-special-registry/)
+  special-purpose registries denied;
+- destination answers deduplicated and capped at 64 retained addresses;
 - numeric IP pinned in HTTP CONNECT, SOCKS4, and SOCKS5 destination requests;
 - concurrent DNS lookup collapse and bounded caching of fully checked answers;
 - optional proxy-gateway DNS coalescing with bounded host/address cardinality,
@@ -22,6 +27,8 @@ Default safeguards:
 - independent certificate validation for HTTPS proxies and HTTPS destinations;
 - overall, connect, input, line, response, concurrency, repeat, redirect, and
   target-count, URL-size, sorting and queue limits, plus a 64 KiB status/header limit;
+- complete-write loops for HTTP CONNECT and SOCKS negotiation messages, with
+  short-write and zero-progress detection;
 - streaming response hashing, streaming ASCII content matching, and a separately
   bounded intelligence-body capture, with full bounded capture only for JSON or
   Unicode content assertions;
@@ -48,7 +55,8 @@ Default safeguards:
 
 Explicit exceptions `--allow-private-targets` and `--allow-remote-dns` reduce
 protection and exist for controlled labs. Private-target mode can reach internal
-services through supplied proxies. Remote-DNS mode lets a proxy independently
+services through supplied proxies, but invalid, unspecified, and multicast
+service addresses remain rejected. Remote-DNS mode lets a proxy independently
 resolve HTTP CONNECT, forward HTTP, SOCKS4a, and SOCKS5 destinations, so split DNS or
 DNS rebinding can defeat IP pinning. These options should not be used with
 untrusted datasets or targets.

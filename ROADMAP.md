@@ -7,7 +7,6 @@ it is not a promise that every item will ship unchanged.
 ## Near term
 
 - Add compatibility coverage across current Ubuntu LTS releases.
-- Expand hostile structured-input fuzzing for CSV, JSON, and JSONL parsing.
 - Add deterministic benchmark comparison tooling for pull requests.
 - Add native licensed MMDB adapters when the pure-Go dependency can be vendored and audited.
 - Evaluate HTTP/2 validation over custom proxy tunnels without weakening timing or destination controls.

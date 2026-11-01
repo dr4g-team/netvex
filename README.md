@@ -153,7 +153,7 @@ and trailing ` # comment` fields. CSV accepts a `proxy` column or named
 `host`/`ip`, `port`, `protocol`, `username`, and `password` columns in any order.
 JSON accepts a streamed array of URI strings or objects containing `proxy`, or
 `protocol`, `host`, and `port`. JSONL and NDJSON accept the same values one per
-line.
+line. UTF-8 BOM prefixes are accepted in text, CSV, JSON, and JSONL inputs.
 
 Gzip input is detected by its magic bytes on files and standard input. Automatic
 format detection understands names such as `proxies.csv.gz` and

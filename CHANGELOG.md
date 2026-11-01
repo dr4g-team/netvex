@@ -26,6 +26,10 @@ All notable changes to NetVex are documented in this file. The project uses
   matcher that avoid copying complete network blocks.
 - Credential-bearing result strings are now constructed only for an explicitly
   requested private working-proxy export.
+- Streaming UTF-8 BOM handling for text, CSV, JSON, JSONL, and automatic input
+  detection, improving compatibility with Windows and spreadsheet exports.
+- Hostile structured-input fuzz coverage across CSV, JSON, JSONL, automatic
+  detection, deduplication, rejection diagnostics, and UTF-8 BOM handling.
 - Streaming multi-pattern response matching for ASCII content assertions,
   avoiding full-body retention and a second lowercase copy while preserving a
   Unicode-compatible bounded path.
@@ -109,11 +113,20 @@ All notable changes to NetVex are documented in this file. The project uses
 - Connection cancellation uses context callbacks instead of one waiting
   goroutine and channel per live socket, reducing scheduler pressure at high
   concurrency without weakening interruption behavior.
+- Destination safety prefixes are parsed once and split by address family;
+  cached DNS lookups continue independently of whichever caller initiated them.
 
 ### Fixed
 
 - Overall expiration during protocol auto-detection now remains a classified
   timeout instead of degrading to a generic `operation_failed` result.
+- JSON and JSONL rejected items now count toward the aggregate record limit.
+- HTTP CONNECT and SOCKS handshakes tolerate valid short socket writes and
+  reject zero-progress writers instead of silently sending partial messages.
+- SOCKS5 reserved bytes, empty bound hostnames, and reply categories receive
+  stricter validation and proxy-versus-destination failure classification.
+- Multiple HTTP proxy authentication challenges are parsed without mistaking
+  Digest parameters or quoted commas for authentication schemes.
 
 ### Security
 
@@ -129,6 +142,10 @@ All notable changes to NetVex are documented in this file. The project uses
 - Metadata enrichment is offline by default and sends no exit IPs to a provider.
 - Redirects without `Location` are rejected explicitly; intermediate redirect and authentication bodies are not downloaded.
 - Verbose rejected-input and credential-file diagnostics quote terminal control characters.
+- Destination resolution deduplicates and retains at most 64 unique answers,
+  rejects invalid service addresses even with private-target mode, and blocks
+  additional non-global, transition, documentation, and discard prefixes from
+  the current IANA special-purpose registries.
 
 ## [0.4.0] - 2026-10-25
 

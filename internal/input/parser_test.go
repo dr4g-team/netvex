@@ -179,6 +179,26 @@ func TestAggregateEntryLimit(t *testing.T) {
 	}
 }
 
+func TestStructuredEntryLimitIncludesRejectedItems(t *testing.T) {
+	tests := []struct {
+		name   string
+		format Format
+		input  string
+	}{
+		{name: "json", format: FormatJSON, input: `[{},{}]`},
+		{name: "jsonl", format: FormatJSONL, input: "{}\n{}\n"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p := New(Options{Format: test.format, DefaultProtocol: model.ProtocolHTTP, MaxEntries: 1})
+			err := p.Emit(strings.NewReader(test.input), func(model.Proxy) error { return nil }, nil)
+			if err == nil || !strings.Contains(err.Error(), "1-entry") || p.Stats.Read != 2 || p.Stats.Rejected != 1 {
+				t.Fatalf("stats=%+v err=%v", p.Stats, err)
+			}
+		})
+	}
+}
+
 func TestAutoFormatAndSourceLabels(t *testing.T) {
 	p := New(Options{Format: FormatAuto, DefaultProtocol: model.ProtocolHTTP, MaxBytes: 1000, Deduplicate: true})
 	var got []model.Proxy
@@ -196,6 +216,36 @@ func TestAutoFormatAndSourceLabels(t *testing.T) {
 	}
 	if len(got) != 2 || got[0].Source != "list.csv" || got[1].Source != "stdin" || got[1].Protocol != model.ProtocolSOCKS5 {
 		t.Fatalf("got=%+v", got)
+	}
+}
+
+func TestUTF8BOMCompatibility(t *testing.T) {
+	tests := []struct {
+		name   string
+		format Format
+		source string
+		input  string
+	}{
+		{name: "text", format: FormatText, source: "list.txt", input: utf8BOMString + "proxy.test:8080\n"},
+		{name: "csv", format: FormatCSV, source: "list.csv", input: utf8BOMString + "host,port\nproxy.test,8080\n"},
+		{name: "json", format: FormatJSON, source: "list.json", input: utf8BOMString + `["proxy.test:8080"]`},
+		{name: "jsonl", format: FormatJSONL, source: "list.jsonl", input: utf8BOMString + `{"proxy":"proxy.test:8080"}` + "\n"},
+		{name: "auto", format: FormatAuto, source: "stdin", input: utf8BOMString + ` ["proxy.test:8080"]`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			p := New(Options{Format: test.format, DefaultProtocol: model.ProtocolHTTP, MaxBytes: 1000})
+			var proxies []model.Proxy
+			if err := p.EmitSource(strings.NewReader(test.input), test.format, test.source, func(proxy model.Proxy) error {
+				proxies = append(proxies, proxy)
+				return nil
+			}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if len(proxies) != 1 || proxies[0].Host != "proxy.test" || proxies[0].Port != 8080 {
+				t.Fatalf("proxies=%+v", proxies)
+			}
+		})
 	}
 }
 
@@ -285,6 +335,37 @@ func FuzzParseProxy(f *testing.F) {
 				}
 			}
 		}
+	})
+}
+
+func FuzzStructuredInput(f *testing.F) {
+	f.Add(uint8(0), []byte("host,port,username,password\nproxy.test,8080,user,pass\n"))
+	f.Add(uint8(1), []byte(`[{"protocol":"socks5","host":"proxy.test","port":1080}]`))
+	f.Add(uint8(2), []byte("{\"proxy\":\"http://proxy.test:8080\"}\n"))
+	f.Add(uint8(3), append([]byte(utf8BOMString), []byte(` ["proxy.test:80"]`)...))
+	f.Fuzz(func(t *testing.T, selector uint8, data []byte) {
+		if len(data) > 1<<20 {
+			t.Skip()
+		}
+		formats := [...]Format{FormatCSV, FormatJSON, FormatJSONL, FormatAuto}
+		format := formats[int(selector)%len(formats)]
+		parser := New(Options{
+			Format:          format,
+			DefaultProtocol: model.ProtocolHTTP,
+			MaxBytes:        int64(len(data)) + 1,
+			MaxEntries:      1000,
+			Deduplicate:     true,
+		})
+		_ = parser.Emit(bytes.NewReader(data), func(proxy model.Proxy) error {
+			if proxy.Host == "" || proxy.Port == 0 {
+				t.Fatalf("invalid emitted proxy: %+v", proxy)
+			}
+			return nil
+		}, func(rejection Rejection) {
+			if rejection.Reason == "" {
+				t.Fatal("rejection has no reason")
+			}
+		})
 	})
 }
 

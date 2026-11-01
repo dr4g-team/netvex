@@ -42,6 +42,22 @@ func (c *memoryConn) SetWriteDeadline(time.Time) error {
 	return nil
 }
 
+type chunkWriter struct {
+	buffer bytes.Buffer
+	limit  int
+	zero   bool
+}
+
+func (w *chunkWriter) Write(value []byte) (int, error) {
+	if w.zero {
+		return 0, nil
+	}
+	if len(value) > w.limit {
+		value = value[:w.limit]
+	}
+	return w.buffer.Write(value)
+}
+
 type countingCloseConn struct {
 	net.Conn
 	closes atomic.Int32
@@ -60,6 +76,67 @@ func (a memoryAddr) String() string  { return string(a) }
 func destination() policy.Destination {
 	u, _ := url.Parse("https://target.test/")
 	return policy.Destination{URL: u, Host: "target.test", Port: "443", IP: netip.MustParseAddr("1.1.1.1")}
+}
+
+func TestFullWritesHandleShortWriters(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		run  func(io.Writer) error
+	}{
+		{name: "bytes", run: func(w io.Writer) error { return writeFull(w, []byte("complete handshake")) }},
+		{name: "string", run: func(w io.Writer) error { return writeStringFull(w, "complete handshake") }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			writer := &chunkWriter{limit: 3}
+			if err := test.run(writer); err != nil || writer.buffer.String() != "complete handshake" {
+				t.Fatalf("value=%q err=%v", writer.buffer.String(), err)
+			}
+			writer = &chunkWriter{limit: 3, zero: true}
+			if err := test.run(writer); !errors.Is(err, io.ErrNoProgress) {
+				t.Fatalf("zero-progress error=%v", err)
+			}
+		})
+	}
+}
+
+func TestSOCKS5RejectsMalformedReplyFields(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+		code string
+	}{
+		{name: "reserved", data: []byte{5, 0, 5, 0, 1, 1}, code: "socks5_bad_reserved"},
+		{name: "empty domain", data: []byte{5, 0, 5, 0, 0, 3, 0}, code: "socks5_bad_address"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			conn := &memoryConn{Reader: bytes.NewReader(test.data)}
+			_, err := socks5Connect(conn, model.Proxy{Protocol: model.ProtocolSOCKS5}, destination(), false)
+			var protocolErr *Error
+			if !errors.As(err, &protocolErr) || protocolErr.Code != test.code {
+				t.Fatalf("err=%v", err)
+			}
+		})
+	}
+}
+
+func TestSOCKS5ReplyClassification(t *testing.T) {
+	for reply := byte(1); reply <= 9; reply++ {
+		data := []byte{5, 0, 5, reply, 0, 1}
+		conn := &memoryConn{Reader: bytes.NewReader(data)}
+		_, err := socks5Connect(conn, model.Proxy{Protocol: model.ProtocolSOCKS5}, destination(), false)
+		var protocolErr *Error
+		if !errors.As(err, &protocolErr) {
+			t.Fatalf("reply=%d err=%v", reply, err)
+		}
+		want := model.StatusFailed
+		if reply >= 3 && reply <= 6 {
+			want = model.StatusInconclusive
+		}
+		if protocolErr.Status != want {
+			t.Fatalf("reply=%d status=%s want=%s", reply, protocolErr.Status, want)
+		}
+	}
 }
 
 func pipeConnector(handler func(net.Conn)) Connector {
@@ -337,6 +414,7 @@ func TestHTTPAuthenticationClassification(t *testing.T) {
 	}{
 		{"missing", false, "Basic realm=provider", "proxy_auth_required"},
 		{"rejected", true, "Basic realm=provider", "proxy_auth_rejected"},
+		{"mixed", true, `Digest realm="provider,a", nonce=x, Basic realm=provider`, "proxy_auth_rejected"},
 		{"unsupported", true, "Digest realm=provider", "proxy_auth_unsupported"},
 	}
 	for _, tc := range tests {

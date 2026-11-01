@@ -208,3 +208,18 @@ The controlled 500,000-item scheduler was also rerun three times at concurrency
 128 against this tree. It measured 910,336 items/s median (range
 888,071-972,978 items/s). This is an engine-overhead regression signal from a
 non-isolated host, not a claim about real proxy throughput.
+
+### Destination policy
+
+Special-purpose destination prefixes were previously parsed inside every
+`IsUnsafe` call. Moving the expanded current IANA set into immutable,
+address-family-specific tables reduced five-sample median policy time from
+1,003 ns/op to 146.5 ns/op with zero allocations in both versions. Reproduce
+with:
+
+```sh
+go test -run '^$' -bench '^BenchmarkIsUnsafe$' -benchmem -count=5 ./internal/policy
+```
+
+The benchmark alternates public and blocked IPv4/IPv6 addresses. It measures
+local classification only, not DNS or network latency.

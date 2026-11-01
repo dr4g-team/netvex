@@ -11,6 +11,7 @@ import (
 )
 
 const maxProxyAddressesPerHost = 16
+const maxDetachedProxyLookup = 30 * time.Second
 
 type proxyHostResolver interface {
 	LookupNetIP(context.Context, string, string) ([]netip.Addr, error)
@@ -58,6 +59,9 @@ func (c *ProxyDNSCache) Address(ctx context.Context, host string, port uint16) (
 }
 
 func (c *ProxyDNSCache) resolve(ctx context.Context, host string) (*proxyDNSCacheEntry, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	now := time.Now()
 	c.mu.Lock()
 	if entry := c.entries[host]; entry != nil {
@@ -86,7 +90,33 @@ func (c *ProxyDNSCache) resolve(ctx context.Context, host string) (*proxyDNSCach
 		c.entries[host] = entry
 	}
 	c.mu.Unlock()
+	if cached {
+		lookupCtx, cancel := detachedLookupContext(ctx)
+		go c.lookup(lookupCtx, cancel, host, entry, true)
+		select {
+		case <-entry.done:
+			return entry, entry.err
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	c.lookup(ctx, func() {}, host, entry, false)
+	if entry.err != nil {
+		return nil, entry.err
+	}
+	return entry, nil
+}
 
+func detachedLookupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	base := context.WithoutCancel(ctx)
+	if deadline, ok := ctx.Deadline(); ok {
+		return context.WithDeadline(base, deadline)
+	}
+	return context.WithTimeout(base, maxDetachedProxyLookup)
+}
+
+func (c *ProxyDNSCache) lookup(ctx context.Context, cancel context.CancelFunc, host string, entry *proxyDNSCacheEntry, cached bool) {
+	defer cancel()
 	resolver := c.Resolver
 	if resolver == nil {
 		resolver = net.DefaultResolver
@@ -128,10 +158,6 @@ func (c *ProxyDNSCache) resolve(ctx context.Context, host string) (*proxyDNSCach
 	}
 	close(entry.done)
 	c.mu.Unlock()
-	if err != nil {
-		return nil, err
-	}
-	return entry, nil
 }
 
 func (c *ProxyDNSCache) evictLocked(now time.Time) {

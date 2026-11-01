@@ -48,6 +48,26 @@ func (failingResolver) LookupNetIP(context.Context, string, string) ([]netip.Add
 	return nil, errors.New("resolver unavailable")
 }
 
+type blockingResolver struct {
+	calls   atomic.Int64
+	started chan struct{}
+	release chan struct{}
+}
+
+func (r *blockingResolver) LookupNetIP(ctx context.Context, _, _ string) ([]netip.Addr, error) {
+	r.calls.Add(1)
+	select {
+	case r.started <- struct{}{}:
+	default:
+	}
+	select {
+	case <-r.release:
+		return []netip.Addr{netip.MustParseAddr("1.1.1.1")}, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
 type fixedMetadata struct{}
 
 func (fixedMetadata) Lookup(ip string) (model.ExitMetadata, bool) {
@@ -727,6 +747,38 @@ func TestDestinationResolutionCachedAcrossAttempts(t *testing.T) {
 	_ = c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy", Port: 80})
 	if calls.Load() != 1 {
 		t.Fatalf("DNS calls=%d want 1", calls.Load())
+	}
+}
+
+func TestDestinationResolutionLeaderCancellationDoesNotFailWaiters(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	resolver := &blockingResolver{started: make(chan struct{}, 1), release: make(chan struct{})}
+	c.Policy.Resolver = resolver
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	leaderDone := make(chan error, 1)
+	go func() {
+		_, err := c.resolve(leaderCtx, "http://target.test/")
+		leaderDone <- err
+	}()
+	<-resolver.started
+	waiterDone := make(chan error, 1)
+	go func() {
+		destination, err := c.resolve(context.Background(), "http://target.test/")
+		if err == nil && destination.IP.String() != "1.1.1.1" {
+			err = errors.New("unexpected resolved destination")
+		}
+		waiterDone <- err
+	}()
+	cancelLeader()
+	if err := <-leaderDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leader err=%v", err)
+	}
+	close(resolver.release)
+	if err := <-waiterDone; err != nil {
+		t.Fatalf("waiter err=%v", err)
+	}
+	if resolver.calls.Load() != 1 {
+		t.Fatalf("resolver calls=%d", resolver.calls.Load())
 	}
 }
 

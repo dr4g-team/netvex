@@ -42,7 +42,9 @@ Socket cancellation uses context callbacks instead of a dedicated waiting
 goroutine and channel for every live connection.
 
 Concurrent destination resolutions are collapsed and safe answers are cached
-for a bounded TTL. Failed lookups are not cached. Permanent policy,
+for a bounded TTL. A canceled initiating caller does not cancel a lookup still
+needed by other waiters; the shared lookup remains bounded by the original
+attempt deadline. Failed lookups are not cached. Permanent policy,
 authentication, and invalid-protocol observations stop repeats unless the
 operator explicitly requests them; successful runs can also stop at the first
 success. This avoids predictable connection multiplication while preserving an
@@ -73,13 +75,16 @@ allocation and resident-memory growth low on large datasets; exact
 deduplication can be disabled for constant parser state.
 
 Gzip is detected from stream magic bytes rather than trusted file extensions.
+UTF-8 BOM prefixes are consumed incrementally for every structured and text
+format.
 The byte and record-count budgets are shared across every input source and
 enforced on the decompressed stream, so additional files, tiny records, and
 compression cannot multiply the configured parser limits. Filename suffixes
 are used only to select the nested data format.
 
 Destination hostnames are exact-allowlisted, every returned address is checked,
-and the selected safe address is placed in CONNECT/SOCKS requests. HTTPS keeps
+duplicates are removed, and at most 64 unique answers are retained. The
+selected safe address is placed in CONNECT/SOCKS requests. HTTPS keeps
 the original hostname only for SNI and certificate validation. Each redirect is
 resolved and checked again. This design prevents the validation target from
 becoming an implicit internal-network access primitive under default settings.

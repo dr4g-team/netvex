@@ -12,13 +12,42 @@ import (
 	"time"
 )
 
+const maxResolvedAddresses = 64
+
 type Resolver interface {
 	LookupNetIP(context.Context, string, string) ([]netip.Addr, error)
 }
 
 var (
-	ErrBlocked = errors.New("destination blocked")
-	ErrResolve = errors.New("destination resolution failed")
+	ErrBlocked         = errors.New("destination blocked")
+	ErrResolve         = errors.New("destination resolution failed")
+	unsafeIPv4Prefixes = [...]netip.Prefix{
+		netip.MustParsePrefix("0.0.0.0/8"),
+		netip.MustParsePrefix("100.64.0.0/10"),
+		netip.MustParsePrefix("192.0.0.0/24"),
+		netip.MustParsePrefix("192.0.2.0/24"),
+		netip.MustParsePrefix("192.88.99.0/24"),
+		netip.MustParsePrefix("198.18.0.0/15"),
+		netip.MustParsePrefix("198.51.100.0/24"),
+		netip.MustParsePrefix("203.0.113.0/24"),
+		netip.MustParsePrefix("224.0.0.0/4"),
+		netip.MustParsePrefix("240.0.0.0/4"),
+	}
+	unsafeIPv6Prefixes = [...]netip.Prefix{
+		netip.MustParsePrefix("64:ff9b::/96"),
+		netip.MustParsePrefix("64:ff9b:1::/48"),
+		netip.MustParsePrefix("100::/64"),
+		netip.MustParsePrefix("100:0:0:1::/64"),
+		netip.MustParsePrefix("2001::/32"),
+		netip.MustParsePrefix("2001:2::/48"),
+		netip.MustParsePrefix("2001:10::/28"),
+		netip.MustParsePrefix("2001:db8::/32"),
+		netip.MustParsePrefix("2002::/16"),
+		netip.MustParsePrefix("3fff::/20"),
+		netip.MustParsePrefix("5f00::/16"),
+		netip.MustParsePrefix("fc00::/7"),
+		netip.MustParsePrefix("fe80::/10"),
+	}
 )
 
 func blocked(message string) error { return fmt.Errorf("%w: %s", ErrBlocked, message) }
@@ -83,12 +112,31 @@ func (p *Policy) Resolve(ctx context.Context, raw string) (Destination, error) {
 	if len(addrs) == 0 {
 		return Destination{}, fmt.Errorf("%w: no addresses", ErrResolve)
 	}
+	approved := make([]netip.Addr, 0, min(len(addrs), maxResolvedAddresses))
 	for _, ip := range addrs {
+		ip = ip.Unmap()
+		if !ip.IsValid() || ip.IsUnspecified() || ip.IsMulticast() || ip.Zone() != "" {
+			return Destination{}, blocked(fmt.Sprintf("destination %q resolved to an invalid service address", host))
+		}
 		if !p.AllowPrivate && IsUnsafe(ip) {
 			return Destination{}, blocked(fmt.Sprintf("destination %q resolved to blocked address %s", host, ip))
 		}
+		duplicate := false
+		for _, existing := range approved {
+			if existing == ip {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		if len(approved) == maxResolvedAddresses {
+			return Destination{}, fmt.Errorf("%w: destination returned more than %d unique addresses", ErrResolve, maxResolvedAddresses)
+		}
+		approved = append(approved, ip)
 	}
-	return Destination{URL: u, Host: host, Port: port, IP: addrs[0].Unmap(), Resolved: addrs, DNSDuration: dnsDuration}, nil
+	return Destination{URL: u, Host: host, Port: port, IP: approved[0], Resolved: approved, DNSDuration: dnsDuration}, nil
 }
 
 func IsUnsafe(ip netip.Addr) bool {
@@ -96,13 +144,17 @@ func IsUnsafe(ip netip.Addr) bool {
 	if !ip.IsValid() || ip.IsUnspecified() || ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() {
 		return true
 	}
-	blocked := []netip.Prefix{
-		netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("192.0.0.0/24"), netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("224.0.0.0/4"), netip.MustParsePrefix("240.0.0.0/4"),
-		netip.MustParsePrefix("2001:db8::/32"), netip.MustParsePrefix("fc00::/7"), netip.MustParsePrefix("fe80::/10"),
-	}
-	for _, prefix := range blocked {
-		if prefix.Contains(ip) {
-			return true
+	if ip.Is4() {
+		for _, prefix := range unsafeIPv4Prefixes {
+			if prefix.Contains(ip) {
+				return true
+			}
+		}
+	} else {
+		for _, prefix := range unsafeIPv6Prefixes {
+			if prefix.Contains(ip) {
+				return true
+			}
 		}
 	}
 	return false

@@ -186,7 +186,7 @@ func httpConnect(conn net.Conn, proxy model.Proxy, dest policy.Destination, remo
 		fmt.Fprintf(&b, "Proxy-Authorization: Basic %s\r\n", token)
 	}
 	b.WriteString("\r\n")
-	if _, err := io.WriteString(conn, b.String()); err != nil {
+	if err := writeStringFull(conn, b.String()); err != nil {
 		return nil, classifyNet(model.StageTunnel, "connect_write", err)
 	}
 	resp, tunnel, err := ReadResponseLimited(conn, &http.Request{Method: http.MethodConnect}, 64<<10)
@@ -213,13 +213,7 @@ func HTTPProxyAuthError(resp *http.Response, supplied bool) error {
 	if !supplied {
 		return &Error{Stage: model.StageNegotiate, Status: model.StatusAuthFailed, Code: "proxy_auth_required", Detail: "HTTP proxy requires credentials"}
 	}
-	schemes := make(map[string]struct{})
-	for _, challenge := range resp.Header.Values("Proxy-Authenticate") {
-		fields := strings.Fields(challenge)
-		if len(fields) > 0 {
-			schemes[strings.ToLower(strings.TrimSuffix(fields[0], ","))] = struct{}{}
-		}
-	}
+	schemes := proxyAuthSchemes(resp.Header.Values("Proxy-Authenticate"))
 	if len(schemes) > 0 {
 		if _, basic := schemes["basic"]; !basic {
 			names := make([]string, 0, len(schemes))
@@ -231,6 +225,39 @@ func HTTPProxyAuthError(resp *http.Response, supplied bool) error {
 		}
 	}
 	return &Error{Stage: model.StageNegotiate, Status: model.StatusAuthFailed, Code: "proxy_auth_rejected", Detail: "HTTP proxy rejected the supplied credentials"}
+}
+
+func proxyAuthSchemes(challenges []string) map[string]struct{} {
+	schemes := make(map[string]struct{})
+	for _, challenge := range challenges {
+		start, quoted, escaped := 0, false, false
+		for index := 0; index <= len(challenge); index++ {
+			if index < len(challenge) {
+				character := challenge[index]
+				if escaped {
+					escaped = false
+					continue
+				}
+				if quoted && character == '\\' {
+					escaped = true
+					continue
+				}
+				if character == '"' {
+					quoted = !quoted
+					continue
+				}
+				if character != ',' || quoted {
+					continue
+				}
+			}
+			segment := strings.TrimSpace(challenge[start:index])
+			start = index + 1
+			if fields := strings.Fields(segment); len(fields) > 0 && !strings.ContainsRune(fields[0], '=') {
+				schemes[strings.ToLower(fields[0])] = struct{}{}
+			}
+		}
+	}
+	return schemes
 }
 
 type readerConn struct {
@@ -318,7 +345,7 @@ func socks4Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, re
 		req = append(req, []byte(dest.Host)...)
 		req = append(req, 0)
 	}
-	if _, err := conn.Write(req); err != nil {
+	if err := writeFull(conn, req); err != nil {
 		return classifyNet(model.StageNegotiate, "socks4_write", err)
 	}
 	reply := make([]byte, 8)
@@ -329,9 +356,14 @@ func socks4Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, re
 		return &Error{Stage: model.StageNegotiate, Status: model.StatusFailed, Code: "socks4_bad_version", Detail: "invalid SOCKS4 response version"}
 	}
 	if reply[1] != 90 {
-		code := map[byte]string{91: "request_rejected", 92: "ident_unreachable", 93: "ident_mismatch"}[reply[1]]
-		if code == "" {
-			code = "unknown_reply"
+		code := "unknown_reply"
+		switch reply[1] {
+		case 91:
+			code = "request_rejected"
+		case 92:
+			code = "ident_unreachable"
+		case 93:
+			code = "ident_mismatch"
 		}
 		status := model.StatusFailed
 		if reply[1] == 92 || reply[1] == 93 {
@@ -347,7 +379,7 @@ func socks5Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, re
 	if proxy.Credentials != nil {
 		methods = append(methods, 2)
 	}
-	if _, err := conn.Write(append([]byte{5, byte(len(methods))}, methods...)); err != nil {
+	if err := writeFull(conn, append([]byte{5, byte(len(methods))}, methods...)); err != nil {
 		return "", classifyNet(model.StageNegotiate, "socks5_greeting_write", err)
 	}
 	resp := make([]byte, 2)
@@ -369,7 +401,7 @@ func socks5Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, re
 		auth := append([]byte{1, byte(len(user))}, user...)
 		auth = append(auth, byte(len(pass)))
 		auth = append(auth, pass...)
-		if _, err := conn.Write(auth); err != nil {
+		if err := writeFull(conn, auth); err != nil {
 			return "", classifyNet(model.StageNegotiate, "socks5_auth_write", err)
 		}
 		ar := make([]byte, 2)
@@ -402,7 +434,7 @@ func socks5Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, re
 		req = append(req, a[:]...)
 	}
 	req = append(req, byte(port>>8), byte(port))
-	if _, err := conn.Write(req); err != nil {
+	if err := writeFull(conn, req); err != nil {
 		return "", classifyNet(model.StageTunnel, "socks5_connect_write", err)
 	}
 	head := make([]byte, 4)
@@ -412,9 +444,12 @@ func socks5Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, re
 	if head[0] != 5 {
 		return "", &Error{Stage: model.StageTunnel, Status: model.StatusFailed, Code: "socks5_bad_reply", Detail: "invalid SOCKS5 CONNECT response"}
 	}
+	if head[2] != 0 {
+		return "", &Error{Stage: model.StageTunnel, Status: model.StatusFailed, Code: "socks5_bad_reserved", Detail: "invalid SOCKS5 reserved response byte"}
+	}
 	if head[1] != 0 {
 		code := socks5Reply(head[1])
-		return "", &Error{Stage: model.StageTunnel, Status: model.StatusInconclusive, Code: "socks5_" + code, Detail: "SOCKS5 destination connection failed: " + code}
+		return "", &Error{Stage: model.StageTunnel, Status: socks5ReplyStatus(head[1]), Code: "socks5_" + code, Detail: "SOCKS5 CONNECT failed: " + code}
 	}
 	var n int
 	switch head[3] {
@@ -428,6 +463,9 @@ func socks5Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, re
 			return "", classifyNet(model.StageTunnel, "socks5_bound_read", err)
 		}
 		n = int(l[0])
+		if n == 0 {
+			return "", &Error{Stage: model.StageTunnel, Status: model.StatusFailed, Code: "socks5_bad_address", Detail: "SOCKS5 returned an empty bound hostname"}
+		}
 	default:
 		return "", &Error{Stage: model.StageTunnel, Status: model.StatusFailed, Code: "socks5_bad_address", Detail: "invalid SOCKS5 bound address type"}
 	}
@@ -438,12 +476,70 @@ func socks5Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, re
 	return authMethod, nil
 }
 
+func writeFull(writer io.Writer, value []byte) error {
+	for len(value) > 0 {
+		written, err := writer.Write(value)
+		if written < 0 || written > len(value) {
+			return io.ErrShortWrite
+		}
+		value = value[written:]
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrNoProgress
+		}
+	}
+	return nil
+}
+
+func writeStringFull(writer io.Writer, value string) error {
+	for len(value) > 0 {
+		written, err := io.WriteString(writer, value)
+		if written < 0 || written > len(value) {
+			return io.ErrShortWrite
+		}
+		value = value[written:]
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrNoProgress
+		}
+	}
+	return nil
+}
+
 func socks5Reply(b byte) string {
-	code := map[byte]string{1: "general_failure", 2: "ruleset_denied", 3: "network_unreachable", 4: "host_unreachable", 5: "connection_refused", 6: "ttl_expired", 7: "command_unsupported", 8: "address_unsupported"}[b]
-	if code == "" {
+	switch b {
+	case 1:
+		return "general_failure"
+	case 2:
+		return "ruleset_denied"
+	case 3:
+		return "network_unreachable"
+	case 4:
+		return "host_unreachable"
+	case 5:
+		return "connection_refused"
+	case 6:
+		return "ttl_expired"
+	case 7:
+		return "command_unsupported"
+	case 8:
+		return "address_unsupported"
+	default:
 		return "unknown_reply"
 	}
-	return code
+}
+
+func socks5ReplyStatus(reply byte) model.Status {
+	switch reply {
+	case 3, 4, 5, 6:
+		return model.StatusInconclusive
+	default:
+		return model.StatusFailed
+	}
 }
 
 func classifyNet(stage model.Stage, code string, err error) error {

@@ -31,6 +31,10 @@ const (
 	FormatJSONL Format = "jsonl"
 )
 
+const utf8BOMString = "\xef\xbb\xbf"
+
+var utf8BOM = []byte(utf8BOMString)
+
 type Options struct {
 	Format          Format
 	DefaultProtocol model.Protocol
@@ -302,14 +306,24 @@ func detectFormat(source string, r io.Reader) (Format, io.Reader) {
 	}
 	br := bufio.NewReaderSize(r, 4096)
 	peek, _ := br.Peek(4096)
-	trimmed := strings.TrimLeft(string(peek), " \t\r\n")
-	if strings.HasPrefix(trimmed, "[") {
-		return FormatJSON, br
+	hasBOM := bytes.HasPrefix(peek, utf8BOM)
+	if hasBOM {
+		peek = peek[len(utf8BOM):]
 	}
-	if strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, `"`) {
-		return FormatJSONL, br
+	trimmed := bytes.TrimLeft(peek, " \t\r\n")
+	detected := FormatText
+	if len(trimmed) > 0 {
+		switch trimmed[0] {
+		case '[':
+			detected = FormatJSON
+		case '{', '"':
+			detected = FormatJSONL
+		}
 	}
-	return FormatText, br
+	if hasBOM {
+		_, _ = br.Discard(len(utf8BOM))
+	}
+	return detected, br
 }
 
 func MaybeDecompress(r io.Reader) (io.Reader, io.Closer, error) {
@@ -329,10 +343,17 @@ func MaybeDecompress(r io.Reader) (io.Reader, io.Closer, error) {
 	return gz, gz, nil
 }
 
-func (p *Parser) accept(raw string, line int, emit func(model.Proxy) error, reject func(Rejection)) error {
+func (p *Parser) countEntry() error {
 	p.Stats.Read++
 	if p.Stats.Read > p.opts.MaxEntries {
 		return fmt.Errorf("input exceeds %d-entry aggregate limit", p.opts.MaxEntries)
+	}
+	return nil
+}
+
+func (p *Parser) accept(raw string, line int, emit func(model.Proxy) error, reject func(Rejection)) error {
+	if err := p.countEntry(); err != nil {
+		return err
 	}
 	proxy, err := ParseProxy(raw, p.opts.DefaultProtocol)
 	if err != nil {
@@ -362,6 +383,9 @@ func (p *Parser) emitText(r io.Reader, emit func(model.Proxy) error, reject func
 	for s.Scan() {
 		line++
 		raw := strings.TrimSpace(s.Text())
+		if line == 1 {
+			raw = strings.TrimPrefix(raw, utf8BOMString)
+		}
 		if raw == "" || strings.HasPrefix(raw, "#") || strings.HasPrefix(raw, ";") {
 			continue
 		}
@@ -397,6 +421,7 @@ func (p *Parser) emitCSV(r io.Reader, emit func(model.Proxy) error, reject func(
 			continue
 		}
 		if line == 1 {
+			rec[0] = strings.TrimPrefix(rec[0], utf8BOMString)
 			var headerErr error
 			columns, headerErr = csvHeader(rec)
 			if headerErr != nil {
@@ -485,7 +510,7 @@ func firstCSVField(record []string, columns map[string]int, names ...string) str
 }
 
 func (p *Parser) emitJSON(r io.Reader, emit func(model.Proxy) error, reject func(Rejection)) error {
-	dec := json.NewDecoder(r)
+	dec := json.NewDecoder(stripUTF8BOM(r))
 	tok, err := dec.Token()
 	if err != nil {
 		return fmt.Errorf("read JSON: %w", err)
@@ -502,7 +527,9 @@ func (p *Parser) emitJSON(r io.Reader, emit func(model.Proxy) error, reject func
 		}
 		raw := rawFromJSON(v)
 		if raw == "" {
-			p.Stats.Read++
+			if err := p.countEntry(); err != nil {
+				return err
+			}
 			p.Stats.Rejected++
 			if reject != nil {
 				reject(Rejection{Source: p.opts.Source, Line: line, Value: "<json item>", Reason: "item must be a proxy string or object"})
@@ -537,6 +564,9 @@ func (p *Parser) emitJSONL(r io.Reader, emit func(model.Proxy) error, reject fun
 	for s.Scan() {
 		line++
 		data := strings.TrimSpace(s.Text())
+		if line == 1 {
+			data = strings.TrimPrefix(data, utf8BOMString)
+		}
 		if data == "" {
 			continue
 		}
@@ -546,7 +576,9 @@ func (p *Parser) emitJSONL(r io.Reader, emit func(model.Proxy) error, reject fun
 		}
 		raw := rawFromJSON(v)
 		if raw == "" {
-			p.Stats.Read++
+			if err := p.countEntry(); err != nil {
+				return err
+			}
 			p.Stats.Rejected++
 			if reject != nil {
 				reject(Rejection{Source: p.opts.Source, Line: line, Value: "<json item>", Reason: "item must be a proxy string or object"})
@@ -561,6 +593,14 @@ func (p *Parser) emitJSONL(r io.Reader, emit func(model.Proxy) error, reject fun
 		return fmt.Errorf("read JSONL: %w", err)
 	}
 	return nil
+}
+
+func stripUTF8BOM(r io.Reader) io.Reader {
+	reader := bufio.NewReaderSize(r, len(utf8BOM))
+	if header, err := reader.Peek(len(utf8BOM)); err == nil && bytes.Equal(header, utf8BOM) {
+		_, _ = reader.Discard(len(utf8BOM))
+	}
+	return reader
 }
 
 func rawFromJSON(v any) string {
