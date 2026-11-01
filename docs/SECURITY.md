@@ -55,8 +55,18 @@ Default safeguards:
 - no shell evaluation, dynamic code loading, privileged operation, or service
   modification.
 
-Explicit exceptions `--allow-private-targets` and `--allow-remote-dns` reduce
-protection and exist for controlled labs. Private-target mode can reach internal
+Proxy gateways are checked as well. The dialer inspects the address actually
+being connected, so a hostname cannot resolve around the check, and private,
+loopback, link-local, carrier-grade NAT, cloud metadata, and reserved gateways are
+refused with `proxy_gateway_blocked`. Without this, an untrusted list could make
+NetVex connect to internal services and metadata endpoints.
+
+Text chosen by a remote proxy is bounded and stripped of control characters before
+it reaches a result, so a hostile proxy cannot fail a run's persistence or write
+escape sequences to a terminal.
+
+Explicit exceptions `--allow-private-targets`, `--allow-private-proxies`, and
+`--allow-remote-dns` reduce protection and exist for controlled labs. Private-target mode can reach internal
 services through supplied proxies, but invalid, unspecified, and multicast
 service addresses remain rejected. Remote-DNS mode lets a proxy independently
 resolve HTTP CONNECT, forward HTTP, SOCKS4a, and SOCKS5 destinations, so split DNS or
@@ -85,9 +95,11 @@ input path, and commits by same-directory atomic replacement only after a
 complete run. Its contents must be handled as secrets.
 
 Shard outputs also contain full credentials and use mode 0600. Resume
-checkpoints are redacted; because their stable ID is credential-free, alternate
-credentials for the same protocol/host/port share resume identity. Do not reuse
-one checkpoint when comparing credential variants.
+checkpoints are redacted. Credentialed result IDs are HMACs keyed by a private
+`identity.key` in the data directory, which keeps low-entropy credentials from
+being recovered offline from saved IDs. Treat that key like a credential file;
+deleting it makes existing IDs incomparable but exposes nothing. If it cannot be
+stored, IDs are valid for one process and resume revalidates instead of skipping.
 
 On Windows, generated files inherit the ACL of their containing directory.
 NetVex uses native exclusive checkpoint locks, rejects reparse-point-like

@@ -3,7 +3,9 @@
 NetVex releases are created from annotated Semantic Versioning tags on a
 clean `main` branch. The release workflow builds static Linux
 amd64/386/ARMv7/ARM64/RISC-V 64 plus macOS, Windows, and FreeBSD amd64/arm64
-archives, generates SHA-256 checksum files, and publishes them to GitHub.
+archives, generates SHA-256 checksum files and an SPDX bill of materials, attests
+build provenance, and publishes them to GitHub. Releases use the exact Go version
+in `GO_RELEASE_VERSION`, which must be raised with every security release of Go.
 `VERSION`, the changelog section, and the tag must agree exactly.
 
 ## Prepare
@@ -13,7 +15,7 @@ full local gate:
 
 ```sh
 make clean
-make check
+make verify
 make cross-check
 make reproducibility-check
 make build
@@ -56,6 +58,8 @@ tar -xzf "netvex-v${version}-linux-amd64.tar.gz"
 ./"netvex-v${version}-linux-amd64"/netvex version
 ./"netvex-v${version}-linux-amd64"/netvex doctor
 ```
+
+Verify build provenance with `gh attestation verify netvex-v${version}-linux-amd64.tar.gz --repo drag-team/netvex`.
 
 Confirm the embedded version, commit, target OS and architecture, license,
 README, and changelog. Verify every native architecture available to the

@@ -3,7 +3,7 @@
 [![CI](https://github.com/drag-team/netvex/actions/workflows/ci.yml/badge.svg)](https://github.com/drag-team/netvex/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/drag-team/netvex?sort=semver)](https://github.com/drag-team/netvex/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-[![Go version](https://img.shields.io/badge/Go-1.24%2B-00ADD8.svg)](go.mod)
+[![Go version](https://img.shields.io/badge/Go-1.26%2B-00ADD8.svg)](go.mod)
 
 NetVex is a fast, terminal-only proxy validation and intelligence tool for
 authorized datasets. It validates complete requests rather than treating an
@@ -37,7 +37,8 @@ daemon, telemetry, or root requirement.
 
 ## Install
 
-NetVex requires Go 1.24 or newer when building from source.
+NetVex requires Go 1.26 or newer when building from source. The `toolchain`
+line in `go.mod` selects the exact compiler used for release builds.
 
 Stable Linux archives for amd64, 386, ARMv7, ARM64, and RISC-V 64 plus macOS,
 Windows, and FreeBSD amd64/arm64 archives and their SHA-256 files are published on the
@@ -102,8 +103,11 @@ Common workflows:
 netvex check proxies.txt
 netvex check --format jsonl --concurrency 128 proxies.txt > results.jsonl
 netvex check --concurrency auto --preflight report --checkpoint run.jsonl proxies.txt
-netvex check --resume run.jsonl proxies.txt
+netvex check --resume run.jsonl --working-output working.txt proxies.txt
 netvex check --working-output working.txt --keep-partial proxies.txt
+netvex check --prescreen --prescreen-retries 0 --no-connect-retry huge-list.txt
+netvex check --working-dir out/ --working-template colon proxies.txt
+netvex check --canary-interval 30s --save --save-status ok,unreliable proxies.txt
 netvex check --scenario examples/scenario.json --policy examples/quality-policy.json --junit-output netvex.xml proxies.txt
 netvex check --format txt --output-status ok proxies.txt > working-redacted.txt
 netvex check --quiet --summary-output summary.json --require-count 10 proxies.txt
@@ -112,12 +116,14 @@ netvex check --reject-text "access denied" --reject-text "cf-turnstile" proxies.
 netvex check --expect-json status=ok --expect-json data.region=us-east proxies.txt
 netvex check --target https://download.example/payload.bin --min-response-bytes 262144 --min-throughput-kbps 500 proxies.txt
 netvex check --baseline-ip 198.51.100.10 --metadata-file ip-metadata.csv.gz --save proxies.txt
-netvex inspect socks5://127.0.0.1:1080 --target https://example.com/
+netvex inspect socks5://127.0.0.1:1080 --allow-private-proxies --target https://example.com/
 netvex import --protocol socks5 raw.txt > normalized.txt
 netvex check --input-format json --repeat 5 --save proxies.json
 netvex results --run latest --status ok --sort score --descending
 netvex export --run latest --status ok --format csv --output working.csv
 netvex stats --run latest --json
+netvex diff
+netvex schema result
 netvex history --runs 20
 netvex pool --run latest
 netvex explore --run latest
@@ -203,7 +209,7 @@ The execution profiles are:
 
 | Profile | Attempts | Minimum success | Behavior |
 |---|---:|---:|---|
-| `fast` | 1 | 100% | Short timeouts, one-minute proxy DNS cache, no retry delay, stops on success |
+| `fast` | 1 | 100% | Short timeouts, `--prescreen`, one-minute proxy DNS cache, no retry delay, stops on success |
 | `balanced` | 2 | 50% | Production default |
 | `thorough` | 5 | 80% | Longer timeouts and stronger reliability evidence |
 
@@ -213,6 +219,32 @@ policy, and invalid-protocol failures stop retries unless `--retry-permanent`
 is set.
 
 ## Performance controls
+
+Run time on a real list is dominated by dead gateways, because each one holds a
+worker until its connect timeout expires. NetVex therefore proves TCP
+reachability before a proxy occupies any destination capacity, and in `auto` mode
+stops at the first TCP failure.
+
+`--prescreen` adds a TCP-only stage in front of validation. Pending connects are
+cheap, so it runs far wider than validation: `--prescreen-concurrency` defaults
+to 4096 and is reduced automatically to fit the file-descriptor limit. Gateways
+that do not answer become final results without using a validation worker;
+`--prescreen-retries` (default 1) and `--prescreen-timeout` (default
+`--connect-timeout`) set how much proof of death is required. Each survivor is
+connected to one extra time. `--no-connect-retry` applies the same idea to
+validation by not repeating measurements after a TCP failure. Both trade some
+recall on intermittently reachable proxies for speed. See
+[measured results](docs/BENCHMARKS.md#dead-gateways).
+
+In `auto` mode one connection fingerprints the protocol, so a proxy that clearly
+answers in one family skips the probes for the others. Silent servers still
+receive every candidate.
+
+`--per-target` limits proxies actually talking to one destination. Time spent
+waiting for that slot is reported as `queue_ms` and counts toward neither latency
+nor the request timeout. `--tls-classical-kex` uses X25519 alone for validation
+TLS, which measured 31% more validations on loopback by dropping the post-quantum
+key share. It remains verified TLS, but leave it off unless CPU is the bottleneck.
 
 `--concurrency`, `--queue-size`, `--per-target`, and `--rate` independently
 control global workers, backpressure, destination pressure, and attempt start
@@ -251,8 +283,11 @@ current file-descriptor limit, capped at 1024. `netvex doctor` reports that
 recommendation. It is a safe starting point, not an adaptive claim that more
 workers will improve a particular network.
 
-`--verbose` prints periodic, real execution counters to stderr. Redirected and
-machine-readable stdout never receives ANSI sequences or progress messages.
+Interactive terminals show a live line on stderr with progress, rates, and an
+ETA once the input is fully read; `--no-progress` disables it. `--verbose` prints
+periodic counters instead. Redirected and machine-readable stdout never receives
+ANSI sequences or progress messages. `--cpu-profile` and `--mem-profile` write
+pprof data for a real run.
 
 ## Response assertions and throughput
 
@@ -342,8 +377,9 @@ Environment configuration covers every persistent engine setting:
 | Concurrency | `NETVEX_CONCURRENCY`, `NETVEX_QUEUE_SIZE`, `NETVEX_PER_TARGET_CONCURRENCY`, `NETVEX_REQUESTS_PER_SECOND` |
 | Measurements | `NETVEX_REPEAT`, `NETVEX_MIN_SUCCESS_RATE`, `NETVEX_STOP_ON_SUCCESS`, `NETVEX_RETRY_PERMANENT_FAILURES`, `NETVEX_ROTATION_SAMPLES`, `NETVEX_ROTATION_INTERVAL` |
 | Time | `NETVEX_CONNECT_TIMEOUT`, `NETVEX_REQUEST_TIMEOUT`, `NETVEX_AUTO_PROBE_TIMEOUT`, `NETVEX_DNS_CACHE_TTL`, `NETVEX_PROXY_DNS_CACHE_TTL`, `NETVEX_RETRY_BACKOFF`, `NETVEX_PROGRESS_INTERVAL` |
-| Destinations | `NETVEX_TARGETS`, `NETVEX_ALLOWED_TARGET_HOSTS`, `NETVEX_MAX_REDIRECTS`, `NETVEX_ALLOW_PRIVATE_TARGETS`, `NETVEX_ALLOW_REMOTE_DNS`, `NETVEX_TARGET_MATRIX`, `NETVEX_TARGET_QUORUM`, `NETVEX_PREFLIGHT` |
-| Response qualification | `NETVEX_MIN_RESPONSE_BYTES`, `NETVEX_MIN_THROUGHPUT_KBPS`, `NETVEX_REQUIRE_TEXT`, `NETVEX_REJECT_TEXT`, `NETVEX_EXPECT_JSON`, `NETVEX_EXPECTED_BODY_SHA256`, `NETVEX_ANONYMITY_BASELINE_IP` |
+| Destinations | `NETVEX_TARGETS`, `NETVEX_ALLOWED_TARGET_HOSTS`, `NETVEX_MAX_REDIRECTS`, `NETVEX_ALLOW_PRIVATE_TARGETS`, `NETVEX_ALLOW_PRIVATE_PROXIES`, `NETVEX_ALLOW_REMOTE_DNS`, `NETVEX_TARGET_MATRIX`, `NETVEX_TARGET_QUORUM`, `NETVEX_PREFLIGHT`, `NETVEX_CANARY_INTERVAL` |
+| Speed | `NETVEX_PRESCREEN`, `NETVEX_PRESCREEN_CONCURRENCY`, `NETVEX_PRESCREEN_RETRIES`, `NETVEX_PRESCREEN_TIMEOUT`, `NETVEX_SKIP_CONNECT_RETRY`, `NETVEX_TLS_CLASSICAL_KEX` |
+| Response qualification | `NETVEX_MIN_RESPONSE_BYTES`, `NETVEX_MIN_THROUGHPUT_KBPS`, `NETVEX_REQUIRE_TEXT`, `NETVEX_REJECT_TEXT`, `NETVEX_EXPECT_JSON`, `NETVEX_EXPECTED_BODY_SHA256`, `NETVEX_ANONYMITY_BASELINE_IP`, `NETVEX_EXPECT_COUNTRY`, `NETVEX_PROBE_UDP` |
 | TLS trust | `NETVEX_CA_BUNDLE`, `NETVEX_PROXY_CA_BUNDLE` |
 | Resource limits | `NETVEX_MAX_INPUT_BYTES`, `NETVEX_MAX_INPUT_ENTRIES`, `NETVEX_MAX_RESPONSE_BYTES`, `NETVEX_INTELLIGENCE_BODY_BYTES` |
 | Persistence and metadata | `NETVEX_DATA_DIR`, `NETVEX_SAVE`, `NETVEX_METADATA_FILE` |
@@ -356,7 +392,10 @@ disabled explicitly, for example with `--allow-remote-dns=false`.
 Target hostnames form an exact allowlist. Additional redirect hostnames require
 `--allow-host`. Private, loopback, link-local, carrier-grade NAT, cloud metadata,
 documentation, multicast, unspecified, and reserved destinations remain blocked
-unless the deliberate `--allow-private-targets` exception is used.
+unless the deliberate `--allow-private-targets` exception is used. Proxy gateways
+on those addresses are blocked the same way, checked at connect time so hostnames
+cannot resolve around it. Use `--allow-private-proxies` for your own local proxies
+such as `127.0.0.1:9050`.
 
 ## Persistence and exports
 
@@ -377,20 +416,41 @@ list with credentials, mode 0600. It commits only after a complete run, refuses
 to replace a file without `--force`, and cannot overwrite an input path. Treat
 the resulting file as a secret.
 
-`--keep-partial` changes only the interruption policy for `--working-output`.
+`--working-dir DIR` splits the same list into one private file per protocol, and
+`--working-template` sets the line format: `uri` (default), `hostport`, `colon`
+(`host:port:user:pass`), or your own using `{protocol}`, `{user}`, `{pass}`,
+`{host}`, `{port}`, `{hostport}`, and `{uri}`.
+
+`--keep-partial` changes only the interruption policy for working output.
 After `Ctrl-C`, NetVex atomically publishes proxies that already qualified as
 `ok`; without it, the previous output remains untouched. Checkpoints remain the
 preferred mechanism when a run will be resumed.
 
 `--checkpoint PATH` appends each completed redacted result and synchronizes at a
 bounded interval. `--resume PATH` repairs an incomplete final line, reloads
-completed endpoint IDs, and skips them. Resume identity is deliberately
-credential-free: credential variants sharing one protocol, host, and port are
-treated as the same endpoint across sessions. Use separate checkpoints when
-testing alternate credentials for one endpoint. Restored results are included
-in cumulative summaries and quality checks; throughput reports only new work.
-Because checkpoints are redacted, `--resume` cannot be combined with a new
-credential-bearing `--working-output`.
+finished results, and skips them; interrupted proxies have no verdict and run
+again. Accounts sharing one gateway are separate results: credentialed IDs are
+keyed hashes using a private `identity.key` in the data directory, so they stay
+comparable between runs on this machine without exposing the credentials. Restored
+results are included in cumulative summaries and quality checks; throughput
+reports only new work. Checkpoints are redacted, so `--resume` with working
+output rebuilds credentials by re-reading the input. Resume refuses a run whose
+validation rules differ from the checkpoint unless `--resume-any-config` is set;
+tuning such as concurrency and timeouts may change freely.
+
+`--canary-interval` checks targets directly during a run. If a target fails twice
+in a row, workers pause for a bounded time and proxies that failed meanwhile become
+`inconclusive` with code `target_unhealthy`, so an outage is not recorded as a pool
+of dead proxies. Failures before the next probe keep their classification.
+
+`--save-status ok,unreliable` keeps only those results on disk while summaries
+still count everything. `netvex diff [BASE [CURRENT]]` compares two saved runs,
+by default the two newest, and reports proxies that died, revived, appeared,
+disappeared, or changed median latency beyond `--latency-change` percent.
+
+`--probe-udp` asks working SOCKS5 proxies for UDP ASSOCIATE. It exercises the
+control channel only, so `supported` does not prove datagrams were relayed.
+`--expect-country US` fails exits outside the set, using `--metadata-file`.
 
 Quality policies use strict schema-versioned JSON. A failed policy commits the
 completed outputs and returns exit 5. `--junit-output` creates an atomic mode-0600
@@ -431,7 +491,7 @@ netvex completion fish > ~/.config/fish/completions/netvex.fish
 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Security model](docs/SECURITY.md)
-- [Data schemas](docs/SCHEMAS.md)
+- [Data schemas](docs/SCHEMAS.md) and [JSON Schema files](docs/schemas)
 - [Validation scenarios](docs/SCENARIOS.md)
 - [Automation, checkpoints, sharding, and quality gates](docs/AUTOMATION.md)
 - [Offline metadata](docs/METADATA.md)

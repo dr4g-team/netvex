@@ -13,8 +13,7 @@ human or machine output.
 Build metadata is derived from the source commit, and
 `make reproducibility-check` verifies byte-identical binaries for a fixed tree.
 
-The development line is `0.7.0-dev`; the latest published tag is `v0.4.0`, and
-result schema version 5 is current. The project is in active development and
+The current version is `0.7.0`, and result schema version 6 is current. The project is in active development and
 the implemented command surface is usable.
 It is not represented as a completed independent security audit.
 
@@ -38,6 +37,10 @@ It is not represented as a completed independent security audit.
   completion, interactive exploration, diagnostics, and controlled benchmarks.
 - Streaming JSON arrays, aggregate Prometheus textfile reporting, and versioned
   machine-readable capability discovery.
+- TCP prescreening, single-connection protocol fingerprinting, private gateway
+  blocking, direct target canaries, per-protocol and templated working output,
+  run comparison, UDP ASSOCIATE probing, expected-country checks, and JSON Schema
+  generated from the model.
 - Native Linux amd64/arm64, macOS arm64, and Windows amd64 CI, with static
   release builds for Linux amd64/386/ARMv7/ARM64/RISC-V 64 plus macOS,
   Windows, and FreeBSD amd64/arm64.
@@ -48,14 +51,14 @@ It is not represented as a completed independent security audit.
 
 ## Verification record
 
-- `make check`: passed (`go vet`, all unit/integration tests, race detector).
+- `make verify`: passed (`go vet`, all tests, race detector, staticcheck,
+  govulncheck, and the 70% coverage floor).
 - Proxy parser fuzzing: 329,878 executions in 10 seconds with no failure.
 - Structured CSV/JSON/JSONL/auto fuzzing: 178,374 executions in 10 seconds
   with no failure.
 - HTTP response fuzzing: 222,363 executions in 10 seconds covering valid,
   truncated, malformed, and oversized inputs with no failure.
-- Package coverage: core packages range from 46.1% to 100%; engine 74.4%,
-  protocol 81.6%, input 84.5%, policy 91.5%, and metadata 81.1%.
+- Total coverage 73.5%, enforced in CI.
 - Controlled 500,000-item scheduler: 910,336 items/s median at concurrency 128
   across three runs on the non-isolated delivery host.
 - Offline IPv4 metadata lookup: 411 ns/op median, zero allocations across three
@@ -88,8 +91,11 @@ unauthorized external proxy infrastructure.
 ## Known limitations and outstanding work
 
 - No independent third-party security audit has been completed.
-- Real-proxy performance is environment and target dependent and is not claimed
-  by the controlled scheduler benchmark.
+- Real-proxy performance is environment and target dependent. `--prescreen` has
+  been measured on simulated and kernel-level dead hosts, not on a real proxy pool,
+  so its recall on intermittently reachable proxies is unmeasured.
+- Native Windows behavior is verified only by CI; the local host compiles and vets
+  Windows code but cannot run it.
 - Anonymity labels require a compatible operator-approved echo target and an
   explicit baseline IP; ordinary websites cannot supply that evidence.
 - Country, ASN, and network labels require an operator-supplied local CSV/gzip dataset;
@@ -98,19 +104,15 @@ unauthorized external proxy infrastructure.
   preflight can negotiate HTTP/2, but end-to-end HTTP/2 proxy validation remains under evaluation.
 - Windows files inherit directory ACLs; NetVex does not attempt to replace
   administrator-managed ACL policy with POSIX permission semantics.
-- Signed releases, SBOMs, and expanded response parsing fuzz targets remain on
-  the roadmap.
 
 ## Resume commands
 
 ```sh
 git status --short
-make check
+make verify
 make cross-check
 make reproducibility-check
-go test ./internal/input -run '^$' -fuzz '^FuzzParseProxy$' -fuzztime=10s
-go test ./internal/input -run '^$' -fuzz '^FuzzStructuredInput$' -fuzztime=10s
-go test ./internal/protocol -run '^$' -fuzz '^FuzzReadResponseLimited$' -fuzztime=10s
+make fuzz FUZZTIME=10s
 make build
 ./bin/netvex version
 ./bin/netvex doctor

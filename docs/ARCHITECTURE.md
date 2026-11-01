@@ -12,9 +12,17 @@ text / CSV / JSON / gzip / bzip2 / scenario
         |
  bounded job queue
         |
- fixed worker pool -- per-target semaphore
-        |
- preflight + cached destination policy -> protocol adapter -> TLS/HTTP validation
+ optional wide TCP prescreen ----------------------> rejected results
+        |                                                  |
+ fixed worker pool                                         |
+        |                                                  |
+ preflight + cached destination policy                     |
+        |                                                  |
+ gateway TCP dial -> auto fingerprint -> per-target slot   |
+        |                                                  |
+ protocol adapter -> TLS/HTTP validation                   |
+        |                                                  |
+        +<-------------------------------------------------+
         |
  raw observations -> target quorum + rotation + score + bounded histogram
         |
@@ -23,7 +31,16 @@ text / CSV / JSON / gzip / bzip2 / scenario
 
 Packages are divided by responsibility: `input`, `config`, `scenario`, `policy`,
 `protocol`, `engine`, `intel`, `metadata`, `score`, `metrics`, `history`,
-`quality`, `output`, `store`, `fsx`, and `cli`.
+`quality`, `output`, `schema`, `store`, `fsx`, and `cli`.
+
+An attempt follows one ordering rule: a gateway proves TCP reachability before it
+occupies destination capacity. Most listed proxies are dead, and a slot held through
+a connect timeout does no work. Slot wait is reported as `queue_ms` and charged to
+neither latency nor the timeout. A connection that queued for more than a second is
+redialed, because proxies drop idle clients and that drop would look like a proxy
+failure.
+
+In `cli`, `checkSession` owns a validation run and `check()` lists its steps.
 Interactive and non-interactive commands use the same engine and models.
 
 OS-specific code is restricted to small build-tagged boundaries: process
@@ -33,9 +50,9 @@ logic and result semantics are shared across every supported platform.
 
 The global worker count, configurable job/result queues, and per-target semaphores are all
 bounded. Each worker checks repeats serially for one proxy, limiting connection
-multiplication. An optional cancellation-aware, lock-serialized rate gate
-limits global attempt starts without pre-reserving future slots or creating a
-timer goroutine per worker. Context deadlines reach
+multiplication. An optional cancellation-aware rate gate reserves slots on a
+virtual schedule and sleeps outside its lock, so timer overshoot cannot accumulate,
+and returns an unused slot on cancellation. Context deadlines reach
 dialing, negotiation, TLS, reads, and writes. SIGINT/SIGTERM close active
 connections, cancel production and workers, and return exit 130.
 Socket cancellation uses context callbacks instead of a dedicated waiting

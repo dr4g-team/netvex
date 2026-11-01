@@ -6,7 +6,66 @@ All notable changes to NetVex are documented in this file. The project uses
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-01
+
+### Changed
+
+- **Breaking:** proxy gateways on private, loopback, link-local, carrier-grade NAT,
+  and reserved addresses are refused at connect time. Use `--allow-private-proxies`
+  for your own local proxies.
+- **Breaking:** result schema version 6. `id` now separates accounts sharing one
+  gateway using a keyed hash, so credentialed IDs differ from earlier versions.
+  Resuming an older checkpoint revalidates those proxies.
+- **Breaking:** Go 1.26 is the minimum; release archives use Go 1.27.3. Go 1.24 was
+  unsupported and govulncheck reported 24 reachable standard-library issues.
+- A gateway now proves TCP reachability before occupying a destination slot, which
+  doubles effective workers at defaults. Queue time is reported as `queue_ms` and no
+  longer counts toward latency or the request timeout.
+- `auto` stops at the first TCP failure and fingerprints the protocol with one
+  connection, reducing dials per dead proxy from 6.3 to 2.
+- The `fast` profile enables `--prescreen`.
+- `elite` now requires an echoed header set; a body with only an address is
+  `undetermined`. More forwarding headers count as evidence.
+- `check` is reorganized around a session, and the CLI and engine are split by
+  responsibility.
+
+### Fixed
+
+- `--resume` skipped every other account on a shared gateway after the first.
+- `--resume` never retried interrupted proxies, and a cancelled proxy could record a
+  failure it never earned.
+- Resume could not work on Windows, where mandatory locks block the second handle
+  it read through and append-only handles cannot truncate.
+- One long `Proxy-Authenticate` header aborted a whole `--save` run.
+- Ctrl-C hung while stdin stayed open; a second Ctrl-C now ends a stuck shutdown.
+- `--rate` was capped near 900/s by accumulating timer overshoot.
+- Flags after a file name were opened as files, after validating the list.
+- Exhausted descriptors or sockets were reported as dead proxies; they now produce
+  `inconclusive` with `local_resource_exhausted` and a warning.
+- Plain-text echo targets gave no exit IP.
+- Single-measurement runs had no median, so `--max-latency` filtered nothing.
+- `NETVEX_DATA_DIR` was ignored by commands that read saved runs.
+- Retry backoff doubled one retry later than intended.
+
 ### Added
+
+- `--prescreen`, `--prescreen-concurrency`, `--prescreen-retries`, and
+  `--prescreen-timeout` for a wide TCP-only stage before validation.
+- `--no-connect-retry` and `--tls-classical-kex`.
+- `--working-dir`, `--working-template`, and `--resume` with working output.
+- Checkpoint configuration fingerprints and `--resume-any-config`.
+- `--canary-interval` for direct target checks during a run.
+- `--save-status`, and `netvex diff` for comparing saved runs.
+- `--cpu-profile`, `--mem-profile`, and a live terminal progress line with ETA.
+- `netvex schema` with JSON Schema derived from the model, published in `docs/schemas`.
+- Result `capabilities`, `--probe-udp`, and `--expect-country`.
+- govulncheck, staticcheck, a coverage floor, weekly fuzzing, SOCKS and
+  authentication-challenge fuzz targets, an SPDX bill of materials, and signed build
+  provenance.
+
+### Development since 0.4.0
+
+#### Added
 
 - A complete NetVex product identity across the executable, Go module,
   configuration namespace, artifacts, CI, documentation, and repository metadata.
@@ -83,7 +142,7 @@ All notable changes to NetVex are documented in this file. The project uses
 - An end-to-end CLI fixture that traverses a controlled local HTTP CONNECT
   proxy and validates the resulting machine-readable evidence.
 
-### Changed
+#### Changed
 
 - Result schema advanced to version 5.
 - Development version advanced to 0.7.0.
@@ -122,7 +181,7 @@ All notable changes to NetVex are documented in this file. The project uses
 - Destination safety prefixes are parsed once and split by address family;
   cached DNS lookups continue independently of whichever caller initiated them.
 
-### Fixed
+#### Fixed
 
 - Overall expiration during protocol auto-detection now remains a classified
   timeout instead of degrading to a generic `operation_failed` result.
@@ -134,7 +193,7 @@ All notable changes to NetVex are documented in this file. The project uses
 - Multiple HTTP proxy authentication challenges are parsed without mistaking
   Digest parameters or quoted commas for authentication schemes.
 
-### Security
+#### Security
 
 - Target names and pool labels reject terminal control characters.
 - Scenario target names distinguish same-origin paths without persisting sensitive URL paths or queries.

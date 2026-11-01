@@ -51,8 +51,14 @@ complete records. Existing checkpoint results are streamed into final output,
 statistics, quality evaluation, and optional saved history before newly completed
 results. The checkpoint is therefore the authoritative cumulative run; inputs
 should describe the same dataset when resuming. `--checkpoint-sync 1` maximizes durability at higher I/O cost.
-Endpoint IDs exclude credentials, so use separate checkpoints for alternate
-credentials on one protocol/host/port.
+Interrupted proxies are never recorded as finished and run again on resume.
+Accounts sharing one gateway keep separate results. A `.config` file beside the
+checkpoint fingerprints the rules that decide a verdict, and resume refuses a
+mismatch unless `--resume-any-config` is set; checkpoints from earlier versions
+have no fingerprint and produce a warning. Credentialed IDs changed in schema
+version 6, so those proxies revalidate when resuming an older checkpoint.
+`--resume` with `--working-output` or `--working-dir` rebuilds credentials from
+the input, so resume against the same dataset.
 Only one process may own a checkpoint at a time; concurrent writers fail with
 an operational error. Existing checkpoints must be owner-only regular files,
 and symbolic links are rejected without being followed.

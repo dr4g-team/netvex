@@ -28,7 +28,7 @@ or silently replaced.
 Release archives are produced for static Linux amd64, 386, ARMv7, ARM64, and
 RISC-V 64 executables, plus macOS, Windows, and FreeBSD amd64/arm64. Windows
 uses ZIP; the other platforms use tar.gz. Each archive has an adjacent SHA-256
-file. Source archives are provided automatically by GitHub. Native CI executes
+file, and every release includes an SPDX bill of materials and signed provenance. Source archives are provided automatically by GitHub. Native CI executes
 Linux amd64/arm64, macOS arm64, and Windows amd64; FreeBSD and the remaining
 release architectures are verified by cross-compiling the application and its
 test packages.

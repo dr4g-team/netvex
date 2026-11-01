@@ -4,8 +4,18 @@ Machine formats are UTF-8. JSON output is one streamed array, JSONL contains
 one complete result object per line, and CSV has a stable header row. Times use RFC 3339 UTC and durations use
 milliseconds as floating-point values.
 
-The current `schema_version` is 5. Readers should tolerate unknown fields and
-missing fields from older runs. Version 5 adds credential-free endpoint IDs,
+The current `schema_version` is 6. `netvex schema result` and
+`netvex schema summary` print JSON Schema derived from the model, and
+[docs/schemas](schemas) holds the published copies; a test fails if they drift.
+Readers should tolerate unknown fields and missing fields from older runs.
+
+Version 6 scopes `id` to the account for credentialed proxies, so several accounts
+on one gateway are separate results; such IDs differ from those written by earlier
+versions and are not comparable with them. It also adds `queue_ms`, `capabilities`,
+the `canary` summary block, and a `median_ms` for single-measurement runs. `total_ms`
+no longer includes destination queueing.
+
+Version 5 adds credential-free endpoint IDs,
 target matrices, rotation profiles, TLS evidence, body hashes, labels, target
 health, quality reports, and attempt totals. Version 4 added proxy-TLS and body timings,
 response size and throughput, offline exit metadata, and the revised anonymity
@@ -19,7 +29,7 @@ Result fields:
 
 | Field | Meaning |
 |---|---|
-| `id` | Truncated SHA-256 protocol/host/port endpoint identifier |
+| `id` | Truncated SHA-256 protocol/host/port identifier, or an HMAC with a local key that also covers credentials |
 | `proxy` | Protocol URI with username and password replaced by `***` |
 | `endpoint` | Credential-free host and port |
 | `protocol` | Requested or successful detected protocol |
@@ -30,9 +40,10 @@ Result fields:
 | `rotation` | Observed exit stability, changes, dominant share, countries, and ASNs |
 | `label` | Optional safe pool or scenario label |
 | `score` | Derived value, confidence, inputs, and explanation |
+| `capabilities` | Demonstrated exit address families and, with `--probe-udp`, the SOCKS5 UDP ASSOCIATE answer |
 | `checked_at` | Start time of proxy validation |
 
-Observation timings are `dns_ms`, `connect_ms`, `proxy_tls_ms`, `tunnel_ms`,
+Observation timings are `dns_ms`, `queue_ms`, `connect_ms`, `proxy_tls_ms`, `tunnel_ms`,
 `tls_ms`, `ttfb_ms`, `body_ms`, and `total_ms`. `body_bytes` and
 `throughput_kbps` describe the bounded response transfer. A failure exposes
 `stage`, stable `code`, and a sanitized `message`. `exit_ip`, `anonymity`,
@@ -73,6 +84,10 @@ reproducible without consulting the original command line.
 `proxy_dns_cache_ttl` records whether gateway resolution reuse affected the
 run; `0s` means every hostname dial used the system resolver normally.
 `keep_partial` records the explicit interruption-output policy when enabled.
+`prescreen`, `skip_connect_retry`, `tls_classical_kex`, `probe_udp`,
+`expect_countries`, `canary_interval`, and `save_status` record the corresponding
+options. With `save_status`, the summary counts every proxy while the saved run
+holds only the selected statuses.
 
 When a quality policy is active, `quality` contains a boolean result and the
 actual/operator/expected tuple for every evaluated check. The same evidence is

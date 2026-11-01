@@ -224,3 +224,68 @@ go test -run '^$' -bench '^BenchmarkIsUnsafe$' -benchmem -count=5 ./internal/pol
 
 The benchmark alternates public and blocked IPv4/IPv6 addresses. It measures
 local classification only, not DNS or network latency.
+
+### Dead gateways
+
+Measured on 2026-11-01 on the same four-vCPU host. A real list is mostly dead
+gateways, so this is the scenario that decides run time.
+
+Real sockets on loopback, using a listener with a saturated backlog so the kernel
+drops SYN packets and every connect blocks until its timeout. Connect timeout 1 s,
+request timeout 2 s, one measurement. All entries are dead:
+
+| Build and mode | Workers | Proxies/s | Max RSS |
+|---|---:|---:|---:|
+| Before these changes | 128 (64 usable) | 62 | 16 MiB |
+| Current | 128 | 125 | 17 MiB |
+| Current, `--prescreen --prescreen-retries 0` | 4096 | 3,795 | 103 MiB |
+
+The first two lines ran 1,000 entries and the third 12,000. At the standard 5 s
+timeout these rates divide by five.
+
+Simulation at 1/50 time scale, where every dial blocks until its timeout, using the
+default 5 s connect and 12 s request timeouts. "Before" figures come from the same
+harness against commit `427e7fe`:
+
+| Mode | Dials per proxy | Proxies/s | Hours per million |
+|---|---:|---:|---:|
+| Before, defaults, `http` | 2.0 | 6.3 | 44.4 |
+| Before, defaults, `auto` | 6.3 | 5.0 | 56.0 |
+| Current, defaults, `http` | 2.0 | 11.7 | 23.7 |
+| Current, defaults, `auto` | 2.0 | 11.8 | 23.6 |
+| Current, `--no-connect-retry`, `auto` | 1.0 | 23.8 | 11.7 |
+| Current, `--prescreen` | 2.0 | 364 | 0.76 |
+| Current, `--prescreen`, no retry, 3 s timeout | 1.0 | 1,134 | 0.24 |
+| Current, as above with 16,384 workers | 1.0 | 1,977 | 0.14 |
+
+The last row is below linear scaling because compressing time makes scheduler
+overhead proportionally larger. A host that refuses connections fails immediately
+and costs far less than these figures. Neither table is a real proxy result:
+real pools mix live, refusing, and silent hosts, and that measurement remains open.
+
+```sh
+NETVEX_SIMULATE=1 go test ./internal/engine -run TestDeadGatewaySimulation -v -count=1
+```
+
+### Live proxies and TLS
+
+An HTTPS destination behind a CONNECT proxy, both separate local processes sharing
+the four vCPUs, 20,000 proxies at concurrency 128. Three alternating samples:
+
+| Build | Median proxies/s | Median p50 |
+|---|---:|---:|
+| Before these changes (Go 1.26.8) | 1,167 | 103 ms |
+| Current (Go 1.27.3) | 1,145 | 105 ms |
+
+The difference is within the sample spread, so live-proxy throughput is unchanged.
+TLS handshakes took 69% of client CPU in this path. Two samples of each variant
+measured 1,205 proxies/s at baseline, 1,581 with `--tls-classical-kex` (31% more),
+and 1,283 with shared TLS session resumption (6% more), which was rejected as not
+worth linking every exit to one client.
+
+`--rate 5000` previously delivered 905 attempts/s because timer overshoot
+accumulated. The limiter unit test now holds 3,500-5,500/s for that setting, and a
+real local run reached 4,051/s.
+
+The controlled 500,000-item scheduler measured 909,052 items/s median (range
+894,294-983,639 items/s), level with the previous baseline.
