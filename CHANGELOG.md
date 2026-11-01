@@ -9,6 +9,7 @@ All notable changes to NetVex are documented in this file. The project uses
 ### Added
 
 - `--save-gzip` stores runs compressed. Every command reads both formats.
+- HTTP Digest proxy authentication with MD5 and SHA-256 over CONNECT.
 
 ### Changed
 
@@ -23,7 +24,7 @@ All notable changes to NetVex are documented in this file. The project uses
 - `--expect-json` paths accept array indexes, as in `items.0.id=7`.
 - `doctor` reports effective prescreen workers.
 - `--output-status` accepts a comma-separated list.
-- Saving results reuses one buffer, removing most per-result allocation.
+- Saving results reuses one buffer, about halving per-result allocation.
 
 ### Fixed
 

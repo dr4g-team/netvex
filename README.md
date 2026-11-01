@@ -422,6 +422,11 @@ the resulting file as a secret.
 (`host:port:user:pass`), or your own using `{protocol}`, `{user}`, `{pass}`,
 `{host}`, `{port}`, `{hostport}`, and `{uri}`.
 
+HTTP proxies may use Basic or Digest (MD5 or SHA-256, RFC 7616) over CONNECT. Basic
+is sent first, as is usual for proxies, so a Digest-only proxy that does not use TLS
+still sees the Basic attempt. Digest is not available for forward mode, which
+`--allow-remote-dns` uses for plain HTTP targets.
+
 `--keep-partial` also publishes `--save`, `--summary-output`, and the other reports
 after an interruption, marked `interrupted` in the summary. Without it an interrupted
 run saves nothing. Its effect on working output:

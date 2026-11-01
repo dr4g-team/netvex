@@ -154,7 +154,7 @@ func currentCapabilities() capabilityDocument {
 		Product:          "netvex",
 		Version:          buildinfo.Version,
 		Protocols:        []string{"http", "https", "socks4", "socks4a", "socks5", "auto"},
-		ProxyAuth:        []string{"http_basic", "socks4_userid", "socks5_username_password"},
+		ProxyAuth:        []string{"http_basic", "http_digest", "socks4_userid", "socks5_username_password"},
 		InputFormats:     []string{"text", "csv", "json", "jsonl", "auto"},
 		InputCompression: []string{"gzip", "bzip2"},
 		OutputFormats:    []string{"table", "json", "jsonl", "csv", "txt"},

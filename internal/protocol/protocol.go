@@ -29,6 +29,8 @@ type Error struct {
 	Code   string
 	Detail string
 	Err    error
+	// digest carries a challenge the connector can answer on a fresh connection.
+	digest *digestChallenge
 }
 
 func (e *Error) Error() string {
@@ -117,6 +119,12 @@ func (c Connector) Dial(ctx context.Context, proxy model.Proxy) (Dialed, error) 
 // OpenDialed negotiates the proxy protocol, consuming pre when it still holds a
 // connection and dialing otherwise.
 func (c Connector) OpenDialed(ctx context.Context, proxy model.Proxy, dest policy.Destination, pre *Dialed) (TimedConn, error) {
+	return c.open(ctx, proxy, dest, pre, "")
+}
+
+// open negotiates one connection. A non-empty authorization replaces Basic, which
+// is how the retry after a Digest challenge presents its answer.
+func (c Connector) open(ctx context.Context, proxy model.Proxy, dest policy.Destination, pre *Dialed, authorization string) (TimedConn, error) {
 	var dialed Dialed
 	if pre != nil && pre.Conn != nil {
 		dialed, *pre = *pre, Dialed{}
@@ -168,11 +176,25 @@ func (c Connector) OpenDialed(ctx context.Context, proxy model.Proxy, dest polic
 			authMethod = "basic"
 		}
 		if dest.URL.Scheme == "https" || !c.AllowRemoteDNS {
-			tunnel, tunnelErr := httpConnect(conn, proxy, dest, c.AllowRemoteDNS)
+			tunnel, tunnelErr := httpConnect(conn, proxy, dest, c.AllowRemoteDNS, authorization)
+			var classified *Error
+			if authorization == "" && errors.As(tunnelErr, &classified) && classified.digest != nil {
+				// A proxy usually closes after a 407, so the answer needs a new connection.
+				answer, answerErr := classified.digest.answer(proxy.Credentials, http.MethodConnect, connectAuthority(dest, c.AllowRemoteDNS))
+				if answerErr != nil {
+					return TimedConn{}, classified
+				}
+				_ = conn.Close()
+				ok = true
+				return c.open(ctx, proxy, dest, nil, answer)
+			}
 			if tunnelErr != nil {
 				return TimedConn{}, tunnelErr
 			}
 			conn = tunnel
+			if authorization != "" {
+				authMethod = "digest"
+			}
 		}
 	case model.ProtocolSOCKS4:
 		if proxy.Credentials != nil {
@@ -212,15 +234,21 @@ func statusFromNet(err error) model.Status {
 	return model.StatusFailed
 }
 
-func httpConnect(conn net.Conn, proxy model.Proxy, dest policy.Destination, remoteDNS bool) (net.Conn, error) {
-	tunnelHost := dest.IP.String()
+func connectAuthority(dest policy.Destination, remoteDNS bool) string {
+	host := dest.IP.String()
 	if remoteDNS {
-		tunnelHost = dest.Host
+		host = dest.Host
 	}
-	authority := net.JoinHostPort(tunnelHost, dest.Port)
+	return net.JoinHostPort(host, dest.Port)
+}
+
+func httpConnect(conn net.Conn, proxy model.Proxy, dest policy.Destination, remoteDNS bool, authorization string) (net.Conn, error) {
+	authority := connectAuthority(dest, remoteDNS)
 	var b strings.Builder
 	fmt.Fprintf(&b, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\n", authority, authority, buildinfo.UserAgent())
-	if proxy.Credentials != nil {
+	if authorization != "" {
+		fmt.Fprintf(&b, "Proxy-Authorization: %s\r\n", authorization)
+	} else if proxy.Credentials != nil {
 		token := base64.StdEncoding.EncodeToString([]byte(proxy.Credentials.Username + ":" + proxy.Credentials.Password))
 		fmt.Fprintf(&b, "Proxy-Authorization: Basic %s\r\n", token)
 	}
@@ -252,16 +280,18 @@ func HTTPProxyAuthError(resp *http.Response, supplied bool) error {
 	if !supplied {
 		return &Error{Stage: model.StageNegotiate, Status: model.StatusAuthFailed, Code: "proxy_auth_required", Detail: "HTTP proxy requires credentials"}
 	}
-	schemes := proxyAuthSchemes(resp.Header.Values("Proxy-Authenticate"))
+	challenges := resp.Header.Values("Proxy-Authenticate")
+	schemes := proxyAuthSchemes(challenges)
 	if len(schemes) > 0 {
 		if _, basic := schemes["basic"]; !basic {
+			digest := parseDigestChallenge(challenges)
 			names := make([]string, 0, len(schemes))
 			for name := range schemes {
 				names = append(names, name)
 			}
 			sort.Strings(names)
 			names = boundedSchemes(names)
-			return &Error{Stage: model.StageNegotiate, Status: model.StatusAuthFailed, Code: "proxy_auth_unsupported", Detail: "HTTP proxy requires unsupported authentication scheme(s): " + strings.Join(names, ",")}
+			return &Error{Stage: model.StageNegotiate, Status: model.StatusAuthFailed, Code: "proxy_auth_unsupported", Detail: "HTTP proxy requires unsupported authentication scheme(s): " + strings.Join(names, ","), digest: digest}
 		}
 	}
 	return &Error{Stage: model.StageNegotiate, Status: model.StatusAuthFailed, Code: "proxy_auth_rejected", Detail: "HTTP proxy rejected the supplied credentials"}
