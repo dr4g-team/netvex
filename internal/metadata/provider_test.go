@@ -70,6 +70,12 @@ func TestRejectsInvalidMetadata(t *testing.T) {
 	if _, err := LoadCSV(path); err == nil {
 		t.Fatal("accepted duplicate normalized headers")
 	}
+	if err := os.WriteFile(path, []byte("prefix,country_code,organization\n192.0.2.0/24,US,hostile\x1b[2Jname\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadCSV(path); err == nil {
+		t.Fatal("accepted terminal control in metadata")
+	}
 }
 
 func BenchmarkLookupIPv4(b *testing.B) {

@@ -8,6 +8,9 @@ on:
 permissions:
   contents: read
 
+env:
+  GOTOOLCHAIN: local
+
 jobs:
   fuzz:
     runs-on: ubuntu-latest

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -221,6 +222,94 @@ func TestDiffComparesTwoSavedRuns(t *testing.T) {
 	}
 }
 
+func TestDiffUsesPersistedRunsWithoutNetwork(t *testing.T) {
+	dir := t.TempDir()
+	runs := filepath.Join(dir, "runs")
+	if err := os.MkdirAll(runs, 0700); err != nil {
+		t.Fatal(err)
+	}
+	baseID := "20261101T120000.000000000Z-base"
+	currentID := "20261101T120001.000000000Z-current"
+	writeRun := func(id string, results []model.Result) {
+		t.Helper()
+		var records bytes.Buffer
+		encoder := json.NewEncoder(&records)
+		for _, result := range results {
+			if err := encoder.Encode(result); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(runs, id+".jsonl"), records.Bytes(), 0600); err != nil {
+			t.Fatal(err)
+		}
+		summary, err := json.Marshal(model.RunSummary{RunID: id})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(runs, id+".summary.json"), summary, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	result := func(id, endpoint string, status model.Status, latency float64) model.Result {
+		return model.Result{ID: id, Endpoint: endpoint, Protocol: model.ProtocolHTTP, Status: status, Score: model.Score{MedianMS: latency}}
+	}
+	writeRun(baseID, []model.Result{
+		result("died", "died.test:80", model.StatusOK, 100),
+		result("revived", "revived.test:80", model.StatusFailed, 0),
+		result("slower", "slower.test:80", model.StatusOK, 100),
+		result("faster", "faster.test:80", model.StatusOK, 100),
+		result("removed", "removed.test:80", model.StatusOK, 100),
+		result("same", "same.test:80", model.StatusFailed, 0),
+	})
+	writeRun(currentID, []model.Result{
+		result("died", "died.test:80", model.StatusFailed, 0),
+		result("revived", "revived.test:80", model.StatusOK, 100),
+		result("slower", "slower.test:80", model.StatusOK, 200),
+		result("faster", "faster.test:80", model.StatusOK, 50),
+		result("added", "added.test:80", model.StatusOK, 100),
+		result("same", "same.test:80", model.StatusFailed, 0),
+	})
+
+	code, out, diag := run([]string{"diff", "--data-dir", dir, "--json", baseID, currentID}, "")
+	if code != ExitOK {
+		t.Fatalf("code=%d diag=%q", code, diag)
+	}
+	var report historypkg.DiffReport
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []historypkg.Change{historypkg.ChangeDied, historypkg.ChangeRevived, historypkg.ChangeSlower, historypkg.ChangeFaster, historypkg.ChangeAdded, historypkg.ChangeRemoved} {
+		if report.Counts[change] != 1 {
+			t.Fatalf("%s count=%d report=%+v", change, report.Counts[change], report)
+		}
+	}
+	if report.Unchanged != 1 || len(report.Entries) != 6 {
+		t.Fatalf("report=%+v", report)
+	}
+
+	code, out, diag = run([]string{"diff", "--data-dir", dir, "--only", "died, revived", "--limit", "1"}, "")
+	if code != ExitOK || !strings.Contains(out, "died.test:80") || strings.Contains(out, "revived.test:80") {
+		t.Fatalf("code=%d out=%q diag=%q", code, out, diag)
+	}
+	code, out, diag = run([]string{"diff", "--data-dir", dir, "--json", baseID}, "")
+	if code != ExitOK || !strings.Contains(out, `"died"`) {
+		t.Fatalf("one-argument diff code=%d out=%q diag=%q", code, out, diag)
+	}
+	if code, _, diag := run([]string{"diff", "--data-dir", dir, "--max-load", "1", baseID, currentID}, ""); code != ExitOperational || !strings.Contains(diag, "load limit") {
+		t.Fatalf("load limit code=%d diag=%q", code, diag)
+	}
+	for _, args := range [][]string{
+		{"diff", "--limit", "0"},
+		{"diff", "--max-load", "0"},
+		{"diff", "--latency-change", "0"},
+		{"diff", "one", "two", "three"},
+	} {
+		if code, _, _ := run(args, ""); code != ExitUsage {
+			t.Fatalf("%v code=%d", args, code)
+		}
+	}
+}
+
 func TestProgressLine(t *testing.T) {
 	line := progressLine(progressState{processed: 500, scheduled: 1000, ingestDone: true, ok: 40, failed: 460, elapsed: 10 * time.Second})
 	for _, want := range []string{"500/1000", "50.0%", "ok=40", "failed=460", "50/s", "ETA 10s"} {
@@ -262,6 +351,37 @@ func TestProfilesAreWrittenAndNeverOverwrittenWithoutForce(t *testing.T) {
 		assertPrivateMode(t, path)
 	}
 	if code, _, diag := run(args, "proxy.test:8080\n"); code != ExitOperational || !strings.Contains(diag, "cpu profile") {
+		t.Fatalf("code=%d diag=%q", code, diag)
+	}
+}
+
+func TestProfilesAndCheckpointSidecarCannotCollide(t *testing.T) {
+	dir := t.TempDir()
+	input := filepath.Join(dir, "proxies.txt")
+	original := []byte("proxy.test:8080\n")
+	if err := os.WriteFile(input, original, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, diag := run([]string{"check", "--cpu-profile", input, "--force", input}, ""); code != ExitUsage || !strings.Contains(diag, "must not overwrite an input") {
+		t.Fatalf("profile/input collision code=%d diag=%q", code, diag)
+	}
+	if payload, err := os.ReadFile(input); err != nil || !bytes.Equal(payload, original) {
+		t.Fatalf("input changed: %q err=%v", payload, err)
+	}
+	profile := filepath.Join(dir, "profile.pprof")
+	if code, _, _ := run([]string{"check", "--cpu-profile", profile, "--mem-profile", profile}, "proxy.test:8080\n"); code != ExitUsage {
+		t.Fatalf("profile collision code=%d", code)
+	}
+	checkpoint := filepath.Join(dir, "run.jsonl")
+	if code, _, _ := run([]string{"check", "--checkpoint", checkpoint, "--summary-output", checkpoint + checkpointConfigSuffix}, "proxy.test:8080\n"); code != ExitUsage {
+		t.Fatalf("checkpoint sidecar collision code=%d", code)
+	}
+}
+
+func TestProfileFinalizationFailureIsOperational(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing", "mem.pprof")
+	code, _, diag := run([]string{"check", "--quiet", "--repeat", "1", "--target", "http://127.0.0.1:9/", "--mem-profile", path}, "proxy.test:8080\n")
+	if code != ExitOperational || !strings.Contains(diag, "memory profile") {
 		t.Fatalf("code=%d diag=%q", code, diag)
 	}
 }
@@ -515,6 +635,19 @@ func TestRunsPruneOlderThan(t *testing.T) {
 		}
 	}
 	for _, value := range []string{"0d", "-1h", "d", ""} {
+		if _, err := parseAge(value); err == nil {
+			t.Fatalf("%q accepted", value)
+		}
+	}
+}
+
+func TestParseAgeBounds(t *testing.T) {
+	for value, want := range map[string]time.Duration{"30d": 720 * time.Hour, "12h": 12 * time.Hour} {
+		if age, err := parseAge(value); err != nil || age != want {
+			t.Fatalf("%s: %v %v", value, age, err)
+		}
+	}
+	for _, value := range []string{"0d", "-1h", "d", "", "999999999999999999d"} {
 		if _, err := parseAge(value); err == nil {
 			t.Fatalf("%q accepted", value)
 		}

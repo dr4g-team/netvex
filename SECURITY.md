@@ -2,13 +2,13 @@
 
 ## Supported versions
 
-Security fixes are applied to the latest released minor version. Older releases
-may be affected even when a fix can be backported cleanly.
+Security fixes are applied to the latest released v1 minor version. Older minor
+lines may be affected even when a fix can be backported cleanly.
 
 | Version | Supported |
 |---|---|
-| 0.4.x | Yes |
-| Earlier | No |
+| 1.x | Yes |
+| Pre-1.0 builds | No |
 
 ## Reporting a vulnerability
 

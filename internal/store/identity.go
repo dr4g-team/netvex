@@ -61,6 +61,10 @@ func readIdentityKey(path string) ([]byte, error) {
 	if _, err := io.ReadFull(file, key); err != nil {
 		return nil, fmt.Errorf("read identity key: %w", err)
 	}
+	var extra [1]byte
+	if n, err := file.Read(extra[:]); n != 0 || !errors.Is(err, io.EOF) {
+		return nil, errors.New("identity key must contain exactly 32 bytes")
+	}
 	return key, nil
 }
 

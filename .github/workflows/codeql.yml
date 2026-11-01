@@ -1,5 +1,8 @@
 name: CodeQL
 
+env:
+  GOTOOLCHAIN: local
+
 on:
   push:
     branches: [main]

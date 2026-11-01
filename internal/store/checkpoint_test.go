@@ -180,4 +180,10 @@ func TestIdentityKeyIsStablePrivateAndValidated(t *testing.T) {
 	if _, err := LoadIdentityKey(dir); err == nil {
 		t.Fatal("truncated identity key accepted")
 	}
+	if err := os.WriteFile(path, make([]byte, identityKeyBytes+1), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadIdentityKey(dir); err == nil {
+		t.Fatal("oversized identity key accepted")
+	}
 }

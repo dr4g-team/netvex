@@ -1298,7 +1298,7 @@ func TestCancelledProxyHasNoVerdict(t *testing.T) {
 func TestPrivateGatewayBlockedByDefault(t *testing.T) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatal(err)
+		t.Skipf("local sockets unavailable: %v", err)
 	}
 	defer listener.Close()
 	cfg := config.Defaults()

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/drag-team/netvex/internal/fsx"
 	"github.com/drag-team/netvex/internal/model"
@@ -291,24 +292,93 @@ func decodeResults(reader io.Reader, emit func(model.Result) error) error {
 }
 
 func validateResult(result model.Result) error {
-	if len(result.ID) < 1 || len(result.ID) > 128 || strings.IndexFunc(result.ID, unicode.IsControl) >= 0 {
+	if !safeText(result.ID, 128) || result.ID == "" {
 		return errors.New("result ID is invalid")
 	}
-	if len(result.Endpoint) > 512 || len(result.Proxy) > 1024 || len(result.Label) > 64 || hasControl(result.Endpoint) || hasControl(result.Proxy) || hasControl(result.Label) {
+	if !safeText(result.Endpoint, 512) || !safeText(result.Proxy, 1024) || !safeText(result.Label, 64) ||
+		!safeText(result.Score.Confidence, 64) || !safeText(result.Score.Reason, 1024) ||
+		!safeText(result.Rotation.Classification, 64) || !safeText(result.Rotation.DominantExitIP, 64) {
 		return errors.New("result identity fields are invalid")
 	}
-	if len(result.Observations) > 2048 || len(result.TargetResults) > 64 {
+	if result.Attempts < 0 || result.Successes < 0 || result.RequiredSuccesses < 0 || result.TargetQuorum < 0 || len(result.Observations) > 2048 || len(result.TargetResults) > 64 {
 		return errors.New("result contains too many observations or target summaries")
 	}
+	if result.Capabilities != nil && !safeText(result.Capabilities.UDPAssociate, 512) {
+		return errors.New("result capability evidence is invalid")
+	}
+	if len(result.Rotation.Countries) > 256 || len(result.Rotation.ASNs) > 2048 || !safeStrings(result.Rotation.Countries, 256) || !safeStrings(result.Rotation.ASNs, 256) {
+		return errors.New("result rotation evidence is invalid")
+	}
+	for _, target := range result.TargetResults {
+		if !safeText(target.Target, 512) || !safeText(target.LastCode, 128) || target.Attempts < 0 || target.Successes < 0 || target.Required < 0 {
+			return errors.New("result target summary is invalid")
+		}
+	}
 	for _, observation := range result.Observations {
-		if len(observation.Target) > 512 || len(observation.Code) > 128 || len(observation.Message) > 2048 || len(observation.ResponseHeaders) > 32 {
+		if !safeText(observation.Target, 512) || !safeText(observation.Code, 128) || !safeText(observation.Message, 2048) ||
+			!safeText(observation.ProxyAuthentication, 64) || !safeText(observation.Anonymity, 64) ||
+			!safeText(observation.ExitIP, 64) || !safeText(observation.ResolvedIP, 64) || !safeText(observation.BodySHA256, 128) ||
+			len(observation.ResponseHeaders) > 32 || len(observation.ForwardingEvidence) > 64 || !safeStrings(observation.ForwardingEvidence, 128) {
 			return errors.New("result observation exceeds structural limits")
+		}
+		for name, value := range observation.ResponseHeaders {
+			if !safeText(name, 128) || !safeText(value, model.MaxMessageBytes) {
+				return errors.New("result response header evidence is invalid")
+			}
+		}
+		if observation.Metadata != nil && !validMetadata(*observation.Metadata) {
+			return errors.New("result metadata evidence is invalid")
+		}
+		for _, evidence := range []*model.TLSInfo{observation.ProxyTLS, observation.DestinationTLS} {
+			if evidence != nil && (!safeText(evidence.Version, 64) || !safeText(evidence.CipherSuite, 128) || !safeText(evidence.ALPN, 256) || !safeText(evidence.ServerName, 512) || !safeText(evidence.PeerCertificateSHA, 128)) {
+				return errors.New("result TLS evidence is invalid")
+			}
 		}
 	}
 	return nil
 }
 
-func hasControl(value string) bool { return strings.IndexFunc(value, unicode.IsControl) >= 0 }
+func safeText(value string, maximum int) bool {
+	return len(value) <= maximum && utf8.ValidString(value) && strings.IndexFunc(value, unicode.IsControl) < 0
+}
+
+func safeStrings(values []string, maximum int) bool {
+	for _, value := range values {
+		if !safeText(value, maximum) {
+			return false
+		}
+	}
+	return true
+}
+
+func validMetadata(metadata model.ExitMetadata) bool {
+	return safeText(metadata.CountryCode, 8) && safeText(metadata.Country, 256) && safeText(metadata.City, 256) &&
+		safeText(metadata.ASN, 256) && safeText(metadata.Organization, 256) && safeText(metadata.NetworkType, 256)
+}
+
+func validateSummary(summary model.RunSummary) error {
+	if !safeText(summary.RunID, 128) || strings.ContainsAny(summary.RunID, "/\\") ||
+		!safeText(summary.Configuration.Profile, 64) || !safeText(summary.Configuration.Scenario, 64) || !safeText(summary.Configuration.Label, 64) ||
+		!safeStrings(summary.Configuration.ValidationTarget, 2048) || !safeStrings(summary.Configuration.ExpectCountries, 8) {
+		return errors.New("run summary identity or configuration is invalid")
+	}
+	for code, count := range summary.FailureCodes {
+		if !safeText(code, 128) || count < 0 {
+			return errors.New("run summary failure evidence is invalid")
+		}
+	}
+	for target, health := range summary.TargetHealth {
+		if !safeText(target, 512) || !safeText(health.Status, 64) || !safeText(health.Code, 128) || !safeText(health.Message, 2048) {
+			return errors.New("run summary target health is invalid")
+		}
+	}
+	for target := range summary.Targets {
+		if !safeText(target, 512) {
+			return errors.New("run summary target identity is invalid")
+		}
+	}
+	return nil
+}
 
 func ReadSummary(path string) (model.RunSummary, error) {
 	var s model.RunSummary
@@ -328,6 +398,13 @@ func ReadSummary(path string) (model.RunSummary, error) {
 	}
 	if limited.N <= 0 {
 		return s, errors.New("summary exceeds 1 MiB")
+	}
+	if s.RunID == "" {
+		name := filepath.Base(strings.TrimSuffix(strings.TrimSuffix(path, ".gz"), runSuffix))
+		s.RunID = name
+	}
+	if err := validateSummary(s); err != nil {
+		return model.RunSummary{}, err
 	}
 	return s, nil
 }
@@ -357,6 +434,10 @@ func ListRuns(dataDir string, limit int) ([]model.RunSummary, error) {
 		summary, err := ReadSummary(resultPath)
 		if err != nil {
 			return nil, fmt.Errorf("read summary %s: %w", name, err)
+		}
+		expectedID := strings.TrimSuffix(name, ".summary.json")
+		if summary.RunID != expectedID {
+			return nil, fmt.Errorf("read summary %s: run_id does not match its filename", name)
 		}
 		runs = append(runs, summary)
 	}

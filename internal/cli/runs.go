@@ -18,12 +18,15 @@ import (
 
 // parseAge adds days to Go durations, the natural unit for retention.
 func parseAge(value string) (time.Duration, error) {
-	age, err := time.ParseDuration(value)
 	if days, found := strings.CutSuffix(value, "d"); found {
-		var count int
-		count, err = strconv.Atoi(days)
-		age = time.Duration(count) * 24 * time.Hour
+		count, err := strconv.ParseInt(days, 10, 64)
+		const day = 24 * time.Hour
+		if err != nil || count <= 0 || count > int64((1<<63-1)/day) {
+			return 0, fmt.Errorf("older-than must be a positive age such as 30d or 12h, not %q", value)
+		}
+		return time.Duration(count) * day, nil
 	}
+	age, err := time.ParseDuration(value)
 	if err != nil || age <= 0 {
 		return 0, fmt.Errorf("older-than must be a positive age such as 30d or 12h, not %q", value)
 	}

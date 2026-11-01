@@ -9,6 +9,7 @@ permissions:
 
 env:
   GO_RELEASE_VERSION: "1.27.3"
+  GOTOOLCHAIN: local
 
 jobs:
   verify:

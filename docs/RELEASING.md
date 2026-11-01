@@ -32,7 +32,7 @@ preparation before tagging it.
 ## Tag
 
 Create an annotated tag only after the release commit has passed CI. The
-following example uses `0.7.0`; replace it with the version in `VERSION`:
+canonical version comes from `VERSION`:
 
 ```sh
 version="$(cat VERSION)"
@@ -52,7 +52,7 @@ Download each archive and its checksum onto a matching clean host. For example,
 on Linux:
 
 ```sh
-version="0.7.0"
+version="1.0.0"
 sha256sum --check "netvex-v${version}-linux-amd64.tar.gz.sha256"
 tar -xzf "netvex-v${version}-linux-amd64.tar.gz"
 ./"netvex-v${version}-linux-amd64"/netvex version

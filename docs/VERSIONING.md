@@ -14,16 +14,16 @@ development versions use `X.Y.Z-dev` on the default branch.
 | `netvex version` | Version, commit, build time, Go version, OS, and architecture of an executable |
 
 The repository does not commit generated binaries. Development work stays in
-the `Unreleased` changelog section until a release is prepared. A development
-version is not a published release and may be skipped; this is why no `v0.5.0`
-tag exists even though the development line previously used that number.
+the `Unreleased` changelog section until a release is prepared. Development
+versions may be skipped and do not receive tags.
 
 ## Compatibility policy
 
-Before `v1.0.0`, minor versions may change command flags or result schemas.
-Schema changes increment `schema_version`, and readers should tolerate unknown
-fields. Patch releases contain compatible fixes. Published tags are never moved
-or silently replaced.
+NetVex remains on major version 1 unless a deliberately incompatible product
+contract requires a new major release. Backward-compatible features increment
+the minor digit (`1.Y.0`); compatible fixes increment the patch digit
+(`1.Y.Z`). Schema changes increment `schema_version`, and readers should
+tolerate unknown fields. Published tags are never moved or silently replaced.
 
 Release archives are produced for static Linux amd64, 386, ARMv7, ARM64, and
 RISC-V 64 executables, plus macOS, Windows, and FreeBSD amd64/arm64. Windows

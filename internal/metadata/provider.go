@@ -9,6 +9,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"unicode"
 
 	inputpkg "github.com/drag-team/netvex/internal/input"
 	"github.com/drag-team/netvex/internal/model"
@@ -169,7 +170,7 @@ func validateEntry(entry model.ExitMetadata) error {
 		return errors.New("country_code must contain two ASCII letters")
 	}
 	for name, value := range map[string]string{"country": entry.Country, "city": entry.City, "asn": entry.ASN, "organization": entry.Organization, "network_type": entry.NetworkType} {
-		if len(value) > 256 || strings.ContainsAny(value, "\r\n\x00") {
+		if len(value) > 256 || strings.IndexFunc(value, unicode.IsControl) >= 0 {
 			return fmt.Errorf("%s is invalid or exceeds 256 bytes", name)
 		}
 	}

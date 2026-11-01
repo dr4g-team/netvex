@@ -236,7 +236,7 @@ func TLSInfoFromState(state tls.ConnectionState) *TLSInfo {
 	info := &TLSInfo{
 		Version:     TLSVersionName(state.Version),
 		CipherSuite: tls.CipherSuiteName(state.CipherSuite),
-		ALPN:        state.NegotiatedProtocol,
+		ALPN:        BoundedMessage(state.NegotiatedProtocol),
 		ServerName:  state.ServerName,
 	}
 	if len(state.PeerCertificates) > 0 {

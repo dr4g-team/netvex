@@ -1,12 +1,14 @@
 package store
 
 import (
-	"github.com/drag-team/netvex/internal/model"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/drag-team/netvex/internal/model"
 )
 
 func TestAtomicRunAndRead(t *testing.T) {
@@ -187,6 +189,52 @@ func TestOversizedResultIsRefusedWithoutStoppingTheWriter(t *testing.T) {
 	}
 	if err := writer.Write(benchmarkResult()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestReadResultsRejectsTerminalControlEvidence(t *testing.T) {
+	result := benchmarkResult()
+	result.Observations[0].Message = "remote\x1b[2Jdiagnostic"
+	payload, err := json.Marshal(result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "hostile.jsonl")
+	if err := os.WriteFile(path, append(payload, '\n'), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := ReadResults(path, func(model.Result) error { return nil }); err == nil || !strings.Contains(err.Error(), "structural limits") {
+		t.Fatalf("terminal control evidence accepted: %v", err)
+	}
+}
+
+func TestReadSummaryRejectsUnsafeIdentityAndFilenameMismatch(t *testing.T) {
+	dir := t.TempDir()
+	runs := filepath.Join(dir, "runs")
+	if err := os.MkdirAll(runs, 0700); err != nil {
+		t.Fatal(err)
+	}
+	resultPath := filepath.Join(runs, "safe.jsonl")
+	if err := os.WriteFile(resultPath, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+	writeSummary := func(summary model.RunSummary) {
+		t.Helper()
+		payload, err := json.Marshal(summary)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(runs, "safe.summary.json"), payload, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeSummary(model.RunSummary{RunID: "bad\x1b[2J"})
+	if _, err := ReadSummary(resultPath); err == nil {
+		t.Fatal("unsafe run ID accepted")
+	}
+	writeSummary(model.RunSummary{RunID: "different"})
+	if _, err := ListRuns(dir, 10); err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("mismatched run ID accepted: %v", err)
 	}
 }
 

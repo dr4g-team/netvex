@@ -40,7 +40,15 @@ func TestCommercialHostPortUserPasswordFormat(t *testing.T) {
 }
 
 func TestParseRejectsAmbiguousCredentials(t *testing.T) {
-	cases := []string{"host:80/path", "http://user@host:80", "http://host:0", "ftp://host:21"}
+	cases := []string{
+		"host:80/path",
+		"http://user@host:80",
+		"http://host:0",
+		"ftp://host:21",
+		"http://user%0d%0aProxy-Authorization%3aevil:password@host:80",
+		"http://user:pass%1bword@host:80",
+		"http://user:pass%00word@host:80",
+	}
 	for _, s := range cases {
 		if _, err := ParseProxy(s, model.ProtocolHTTP); err == nil {
 			t.Errorf("accepted %q", s)

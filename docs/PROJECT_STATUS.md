@@ -13,9 +13,8 @@ human or machine output.
 Build metadata is derived from the source commit, and
 `make reproducibility-check` verifies byte-identical binaries for a fixed tree.
 
-The development line is `0.8.0-dev`; the latest published tag is `v0.7.0`, and
-result schema version 7 is current. The project is in active development and
-the implemented command surface is usable.
+The stable line is `1.0.0`, and result schema version 7 is current. The source,
+release metadata, and documented command surface are aligned for the v1 release.
 It is not represented as a completed independent security audit.
 
 ## Verified capabilities
@@ -52,20 +51,28 @@ It is not represented as a completed independent security audit.
 
 ## Verification record
 
-- `make verify`: passed (`go vet`, all tests, race detector, staticcheck,
-  govulncheck, and the 75% coverage floor).
-- Proxy parser fuzzing: 329,878 executions in 10 seconds with no failure.
-- Structured CSV/JSON/JSONL/auto fuzzing: 178,374 executions in 10 seconds
+- `make check`: passed (`gofmt`, `go vet`, all tests, and the race detector).
+- The complete suite passed 20 times with randomized test order.
+- `make cover`: 75.4% statement coverage; the 75% floor remains enforced in CI.
+- `make cross-check`: passed for 17 OS/architecture targets, including test
+  vetting on Linux 386/ARM, Windows amd64, and macOS ARM64.
+- `make reproducibility-check`: two independent builds were byte-identical.
+- Proxy parser fuzzing: 256,519 executions in 10 seconds with no failure.
+- Structured CSV/JSON/JSONL/auto fuzzing: 159,661 executions in 10 seconds
   with no failure.
-- HTTP response fuzzing: 222,363 executions in 10 seconds covering valid,
+- HTTP response fuzzing: 195,141 executions in 10 seconds covering valid,
   truncated, malformed, and oversized inputs with no failure.
-- Coverage floor of 75% enforced in CI.
+- SOCKS4/SOCKS5 reply, proxy-authentication, and Digest fuzzing: 512,371
+  executions across four 10-second targets with no failure.
+- `staticcheck` and `govulncheck` remain mandatory CI gates. They could not be
+  rerun on this restricted host because their pinned tool modules were not
+  cached and the sandbox denied the configured module-proxy socket.
 - Controlled 500,000-item scheduler: 910,336 items/s median at concurrency 128
   across three runs on the non-isolated delivery host.
 - Offline IPv4 metadata lookup: 411 ns/op median, zero allocations across three
   benchmark samples.
 - A 200,000-record import comparison measured 0.61 s and 15.8 MiB maximum RSS
-  for the current parser versus 1.21 s and 18.6 MiB for commit `74427aa`.
+  for the current parser versus 1.21 s and 18.6 MiB for the earlier baseline.
 - The bounded HTTP response reader measured 6.08 us/op and 5,123 B/op after
   removing duplicate buffering.
 - Streaming 1 MiB response evidence with a 64 KiB intelligence capture measured

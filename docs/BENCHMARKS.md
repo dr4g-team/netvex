@@ -15,7 +15,7 @@ done
 go test -bench . -benchmem ./internal/engine
 ```
 
-NetVex 0.2.0 delivery-host results (Ubuntu 26.04.1, Linux 7.0, 4 vCPU
+Initial delivery-host results (Ubuntu 26.04.1, Linux 7.0, 4 vCPU
 Haswell-class KVM, Go 1.26.8, 2026-10-24) are the median of three runs with
 500,000 zero-delay items. The host was not isolated, so normal VPS scheduling
 noise remains:
@@ -39,28 +39,28 @@ largest concurrency setting.
 A separate streamed-input check normalized 200,000 distinct entries in 1.10 s
 with 29,536 KiB maximum RSS. Deduplication intentionally retains one hash per
 distinct input, so memory is bounded by the input byte limit rather than
-strictly constant. Version 0.2.0 adds `--no-deduplicate` for constant parser
+strictly constant. The `--no-deduplicate` mode provides constant parser
 state on datasets where duplicate checks are acceptable.
 
-Version 0.3.0 changed deduplication keys from allocated hexadecimal strings to
+The next parser iteration changed deduplication keys from allocated hexadecimal strings to
 compact binary values and streams JSONL encoding directly. On a generated file
 of 500,000 distinct proxies, measured twice on the same non-isolated host:
 
 | Mode | Elapsed | Max RSS |
 |---|---:|---:|
-| v0.2.0 exact dedup | 2.87–2.98 s | 66–69 MiB |
-| v0.3.0 exact dedup | 2.44–2.60 s | 33–34 MiB |
-| v0.3.0 no dedup | 2.17 s | 13.3 MiB |
+| Earlier exact dedup | 2.87–2.98 s | 66–69 MiB |
+| Compact exact dedup | 2.44–2.60 s | 33–34 MiB |
+| No dedup | 2.17 s | 13.3 MiB |
 
 Output was redirected to `/dev/null`; the input and executable conditions were
 otherwise identical. The exact-dedup memory reduction was approximately 50%.
 
-After the v0.3.0 changes, three additional 500,000-item scheduler runs at
+After those parser changes, three additional 500,000-item scheduler runs at
 concurrency 128 measured 756,062–817,518 items/s, with a median of 813,349
 items/s. Host scheduling remained uncontrolled, so this is recorded as a
 regression baseline rather than a network-throughput promise.
 
-The public-release verification of NetVex 0.4.0 on 2026-10-25 measured
+The 2026-10-25 public-build verification measured
 816,643 items/s median under the same 500,000-item, 128-worker scheduler
 benchmark (range 791,160–852,932 items/s). A one-million-item run measured
 850,592 items/s, 1.17 seconds wall time, and 13,116 KiB maximum RSS. Reliability
@@ -70,7 +70,7 @@ controlled measurement.
 Compare builds using the same executable, count, concurrency, delay, Go
 version, and host load. Never benchmark against unauthorized proxies.
 
-The 0.5.0 development parser benchmark uses 1,000 distinct text records per
+The parser benchmark uses 1,000 distinct text records per
 operation on the same four-vCPU host. Three samples produced these medians:
 
 | Input | Time/op | Decompressed throughput | Allocations/op |
@@ -83,7 +83,7 @@ and approximately 3.7% median time in this small-input test. Reproduce with
 `go test -run '^$' -bench '^BenchmarkParser' -benchmem -count=3 ./internal/input`.
 The throughput column counts decompressed bytes and is not a network result.
 
-The NetVex 0.6.0 development scheduler measured 786,085 items/s median
+The subsequent scheduler baseline measured 786,085 items/s median
 across three 500,000-item runs at concurrency 128 on the same non-isolated host
 (range 779,540–855,874 items/s). This remains an engine-overhead baseline, not a
 network proxy rate.
@@ -92,7 +92,7 @@ The offline IPv4 longest-prefix metadata lookup benchmark measured a median of
 408 ns/op across three samples, with zero allocations per lookup. Reproduce with
 `go test -run '^$' -bench '^BenchmarkLookupIPv4$' -benchmem -count=3 ./internal/metadata`.
 
-The NetVex 0.7.0 development engine measured 812,682 items/s median across
+The 2026-10-26 engine measured 812,682 items/s median across
 three 500,000-item runs at concurrency 128 on 2026-10-26 (range
 789,790–869,883 items/s). The corresponding scheduler microbenchmarks measured
 1,962 ns/op with one worker, 1,245 ns/op with 16 workers, and 1,029 ns/op with
@@ -105,7 +105,7 @@ allocations respectively. The host was not isolated and the gzip samples had
 visible scheduler variance, so these figures are regression evidence rather
 than performance guarantees.
 
-On 2026-10-28, the 0.7.0 development parser was profiled and changed to use
+On 2026-10-28, the parser was profiled and changed to use
 direct endpoint parsing, allocation-free hostname validation, `net/netip`, and
 two process-local `hash/maphash` seeds compressed into a 96-bit fingerprint.
 Five to seven samples on the same Go 1.26.8 four-vCPU host produced:
@@ -118,7 +118,7 @@ Five to seven samples on the same Go 1.26.8 four-vCPU host produced:
 | Current, gzip dedup | 1.01 ms | 18.7 MB/s | 203,511 | 1,047 |
 
 An executable-level import of the same 200,000-entry, 5,088,895-byte text file
-was alternated five times between commit `74427aa` and the current tree. Output
+was alternated five times between the earlier baseline and the current tree. Output
 was redirected to `/dev/null`; medians were 1.21 s and 19,032 KiB maximum RSS
 before, versus 0.61 s and 16,200 KiB currently. This measures parsing,
 deduplication, normalization, and output formatting together.
@@ -245,7 +245,7 @@ timeout these rates divide by five.
 
 Simulation at 1/50 time scale, where every dial blocks until its timeout, using the
 default 5 s connect and 12 s request timeouts. "Before" figures come from the same
-harness against commit `427e7fe`:
+harness against the earlier baseline:
 
 | Mode | Dials per proxy | Proxies/s | Hours per million |
 |---|---:|---:|---:|

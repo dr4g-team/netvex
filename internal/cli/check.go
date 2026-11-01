@@ -72,9 +72,19 @@ type checkSession struct {
 	jobs               chan model.Proxy
 }
 
-func (c CLI) check(args []string, forceDetailed bool) int {
-	s, code := c.newCheckSession(args, forceDetailed)
+func (c CLI) check(args []string, forceDetailed bool) (code int) {
+	s, initialCode := c.newCheckSession(args, forceDetailed)
 	if s == nil {
+		return initialCode
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)
+	defer stop()
+	// Restoring default signal handling lets a second Ctrl-C end a stuck shutdown.
+	context.AfterFunc(ctx, stop)
+	defer s.release()
+	// Validate every path before profiling or network activity can create or
+	// truncate anything supplied by the operator.
+	if code := s.validatePaths(ctx); code != ExitOK {
 		return code
 	}
 	stopProfiles, err := startProfiles(s.options.cpuProfile, s.options.memProfile, s.options.forceWorking)
@@ -85,14 +95,12 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 	defer func() {
 		if err := stopProfiles(); err != nil {
 			fmt.Fprintln(c.Stderr, err)
+			if code != ExitInterrupted {
+				code = ExitOperational
+			}
 		}
 	}()
-	ctx, stop := signal.NotifyContext(context.Background(), interruptSignals()...)
-	defer stop()
-	// Restoring default signal handling lets a second Ctrl-C end a stuck shutdown.
-	context.AfterFunc(ctx, stop)
-	defer s.release()
-	for _, step := range []func(context.Context) int{s.prepareChecker, s.runPreflight, s.validatePaths, s.openCheckpoint, s.openOutputs, s.openHistory} {
+	for _, step := range []func(context.Context) int{s.prepareChecker, s.runPreflight, s.openCheckpoint, s.openOutputs, s.openHistory} {
 		if code := step(ctx); code != ExitOK {
 			return code
 		}
@@ -291,7 +299,10 @@ func (s *checkSession) validatePaths(context.Context) int {
 	o := s.options
 	outputs := []struct{ label, path string }{
 		{"checkpoint", s.checkpointPath}, {"working output", o.workingOutput}, {"summary output", o.summaryOutput},
-		{"metrics output", o.metricsOutput}, {"JUnit output", o.junitOutput},
+		{"metrics output", o.metricsOutput}, {"JUnit output", o.junitOutput}, {"CPU profile", o.cpuProfile}, {"memory profile", o.memProfile},
+	}
+	if s.checkpointPath != "" {
+		outputs = append(outputs, struct{ label, path string }{"checkpoint fingerprint", s.checkpointPath + checkpointConfigSuffix})
 	}
 	if o.workingDir != "" {
 		for _, path := range workingDirPaths(o.workingDir) {
@@ -359,6 +370,12 @@ func (s *checkSession) openCheckpoint(context.Context) int {
 	}
 	if !s.resumeCheckpoint {
 		if err := writeCheckpointFingerprint(s.checkpointPath, fingerprint); err != nil {
+			_ = s.checkpoint.Close()
+			s.checkpoint = nil
+			if !s.checkpointExisted {
+				_ = os.Remove(s.checkpointPath)
+				_ = os.Remove(s.checkpointPath + checkpointConfigSuffix)
+			}
 			fmt.Fprintln(s.cli.Stderr, "checkpoint error:", err)
 			return ExitOperational
 		}

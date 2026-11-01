@@ -128,10 +128,7 @@ func selectedHeaders(h http.Header) map[string]string {
 			if out == nil {
 				out = make(map[string]string, 4)
 			}
-			if len(v) > 512 {
-				v = v[:512]
-			}
-			out[k] = v
+			out[k] = model.BoundedMessage(v)
 		}
 	}
 	return out

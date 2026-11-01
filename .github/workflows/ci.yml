@@ -9,6 +9,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # Make each matrix entry use the compiler installed by setup-go. Without
+  # this, go.mod's newer toolchain suggestion silently replaces Go 1.26.
+  GOTOOLCHAIN: local
+
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true

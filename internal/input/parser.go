@@ -18,6 +18,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/drag-team/netvex/internal/model"
 )
@@ -216,6 +218,11 @@ func buildProxy(protocol model.Protocol, rawHost, portText string, credentials *
 		}
 		if len(credentials.Username) > 255 || len(credentials.Password) > 255 {
 			return model.Proxy{}, errors.New("proxy credentials exceed protocol limits")
+		}
+		if !utf8.ValidString(credentials.Username) || !utf8.ValidString(credentials.Password) ||
+			strings.IndexFunc(credentials.Username, unicode.IsControl) >= 0 ||
+			strings.IndexFunc(credentials.Password, unicode.IsControl) >= 0 {
+			return model.Proxy{}, errors.New("proxy credentials contain invalid or control characters")
 		}
 	}
 	return model.Proxy{Protocol: protocol, Host: host, Port: uint16(port), Credentials: credentials}, nil
