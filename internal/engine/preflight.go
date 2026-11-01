@@ -19,7 +19,7 @@ func (c *Checker) Preflight(ctx context.Context) map[string]model.TargetHealth {
 		health model.TargetHealth
 	}
 	output := make(chan item, len(c.Config.Targets))
-	semaphore := make(chan struct{}, minInt(4, len(c.Config.Targets)))
+	semaphore := make(chan struct{}, min(4, len(c.Config.Targets)))
 	for _, target := range c.Config.Targets {
 		target := target
 		go func() {
@@ -89,11 +89,4 @@ func (c *Checker) preflightTarget(parent context.Context, target string) model.T
 		health.Message = fmt.Sprintf("target returned HTTP status %d", response.StatusCode)
 	}
 	return health
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
 }

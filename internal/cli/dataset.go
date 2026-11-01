@@ -345,7 +345,7 @@ func (c CLI) explore(args []string) int {
 		fmt.Fprintln(c.Stderr, err)
 		return ExitOperational
 	}
-	results := make([]model.Result, 0, minInt(*maxLoad, 4096))
+	results := make([]model.Result, 0, min(*maxLoad, 4096))
 	if err := store.ReadResults(path, func(result model.Result) error {
 		if len(results) >= *maxLoad {
 			return errors.New("explorer load limit exceeded")
@@ -360,12 +360,12 @@ func (c CLI) explore(args []string) int {
 	page, query := 0, ""
 	for {
 		filtered := filterSearch(results, query)
-		pages := maxInt(1, (len(filtered)+*pageSize-1) / *pageSize)
+		pages := max(1, (len(filtered)+*pageSize-1) / *pageSize)
 		if page >= pages {
 			page = pages - 1
 		}
 		start := page * *pageSize
-		end := minInt(start+*pageSize, len(filtered))
+		end := min(start+*pageSize, len(filtered))
 		fmt.Fprintf(c.Stdout, "\nNetVex results  page %d/%d  matches=%d  search=%q\n", page+1, pages, len(filtered), query)
 		fmt.Fprintln(c.Stdout, "STATUS        SCORE   MEDIAN    PROTOCOL  ENDPOINT")
 		for _, result := range filtered[start:end] {

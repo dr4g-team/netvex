@@ -49,9 +49,3 @@ func (e Engine) Run(ctx context.Context, input <-chan model.Proxy) <-chan model.
 	go func() { wg.Wait(); close(out) }()
 	return out
 }
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
