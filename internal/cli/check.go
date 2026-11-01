@@ -61,6 +61,7 @@ type checkSession struct {
 	writer        *output.Writer
 
 	summary   model.RunSummary
+	partial   bool
 	latencies *metrics.Histogram
 	start     time.Time
 
@@ -186,8 +187,8 @@ func (s *checkSession) validateOptions() error {
 	if o.workingOutput != "" && o.workingDir != "" {
 		return errors.New("working-output and working-dir are mutually exclusive")
 	}
-	if o.keepPartial && !o.exportsWorking() {
-		return errors.New("keep-partial requires working-output or working-dir")
+	if o.keepPartial && !o.exportsWorking() && !o.save && o.summaryOutput == "" {
+		return errors.New("keep-partial requires working-output, working-dir, save, or summary-output")
 	}
 	if o.workingTemplate != "" && !o.exportsWorking() {
 		return errors.New("working-template requires working-output or working-dir")
@@ -658,13 +659,7 @@ func (s *checkSession) finish(ctx context.Context) int {
 		}
 	}
 	if ctx.Err() != nil {
-		if s.options.keepPartial {
-			if err := commitPartialWorking(s.working, s.workingPath(), stderr); err != nil {
-				fmt.Fprintln(stderr, "partial working output error:", err)
-				return ExitOperational
-			}
-		}
-		return ExitInterrupted
+		return s.finishInterrupted()
 	}
 	if summary.Input.Accepted == 0 {
 		return s.discardEmptyRun()
@@ -678,6 +673,27 @@ func (s *checkSession) finish(ctx context.Context) int {
 		return ExitNoSuccess
 	}
 	return ExitOK
+}
+
+// finishInterrupted publishes completed work when --keep-partial asks for it.
+// Input statistics are taken only if the parser already finished, because it may
+// be blocked on an open stdin. Quality gates still run but cannot change the exit.
+func (s *checkSession) finishInterrupted() int {
+	if !s.options.keepPartial {
+		return ExitInterrupted
+	}
+	select {
+	case s.summary.Input = <-s.inputStats:
+		s.summary.Input.Resumed = int(s.resumed.Load())
+	default:
+	}
+	s.summary.Interrupted = true
+	s.partial = true
+	s.concludeSummary()
+	if code := s.publish(); code != ExitOK {
+		return code
+	}
+	return ExitInterrupted
 }
 
 func (s *checkSession) discardEmptyRun() int {
@@ -767,7 +783,12 @@ func (s *checkSession) publish() int {
 		}
 		fmt.Fprintf(stderr, "saved aggregate metrics to %q\n", s.options.metricsOutput)
 	}
-	if s.working != nil {
+	if s.partial {
+		if err := commitPartialWorking(s.working, s.workingPath(), stderr); err != nil {
+			fmt.Fprintln(stderr, "partial working output error:", err)
+			return ExitOperational
+		}
+	} else if s.working != nil {
 		if err := s.working.Commit(); err != nil {
 			fmt.Fprintln(stderr, "working output error:", err)
 			return ExitOperational

@@ -8,6 +8,16 @@ All notable changes to NetVex are documented in this file. The project uses
 
 ### Changed
 
+- `--keep-partial` now also publishes saved runs and reports after an interruption,
+  marked `interrupted` in the summary. Result schema version 7.
+- `inspect` no longer writes the proxy, including credentials, to a temporary file,
+  accepts `-` to read it from standard input, and accepts flags before the proxy.
+- When this host runs out of sockets or descriptors, new attempts pause briefly
+  instead of failing together.
+- Redirects reuse the destination DNS cache, keyed by origin so remote paths cannot
+  grow it.
+- `--expect-json` paths accept array indexes, as in `items.0.id=7`.
+- `doctor` reports effective prescreen workers.
 - `--output-status` accepts a comma-separated list.
 - Commit history on `main` after `427e7fe` was rewritten to remove co-author
   trailers, so tag `v0.7.0` is not an ancestor of `main`. Its tree is identical to

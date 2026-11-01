@@ -46,6 +46,32 @@ func (c *Checker) waitBackoff(ctx context.Context, p model.Proxy, retry int) boo
 	}
 }
 
+// localBackoff is how long new attempts wait after this host runs out of sockets
+// or descriptors. Without it, every worker would fail at once and turn one
+// momentary shortage into a large batch of inconclusive results.
+const localBackoff = 250 * time.Millisecond
+
+func (c *Checker) noteLocalExhaustion(obs model.Observation) {
+	if obs.Code == "local_resource_exhausted" {
+		c.localPauseUntil.Store(time.Now().Add(localBackoff).UnixNano())
+		c.localPauses.Add(1)
+	}
+}
+
+// waitTurn holds an attempt until this host has capacity and the rate allows it.
+func (c *Checker) waitTurn(ctx context.Context) bool {
+	if wait := time.Until(time.Unix(0, c.localPauseUntil.Load())); wait > 0 {
+		timer := time.NewTimer(wait)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return false
+		}
+	}
+	return c.waitRate(ctx)
+}
+
 func (c *Checker) waitRate(ctx context.Context) bool {
 	if c.Config.RateLimit <= 0 {
 		return true

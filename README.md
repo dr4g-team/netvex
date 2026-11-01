@@ -113,10 +113,11 @@ netvex check --format txt --output-status ok proxies.txt > working-redacted.txt
 netvex check --quiet --summary-output summary.json --require-count 10 proxies.txt
 netvex check --quiet --metrics-output netvex.prom proxies.txt
 netvex check --reject-text "access denied" --reject-text "cf-turnstile" proxies.txt
-netvex check --expect-json status=ok --expect-json data.region=us-east proxies.txt
+netvex check --expect-json status=ok --expect-json data.items.0.region=us-east proxies.txt
 netvex check --target https://download.example/payload.bin --min-response-bytes 262144 --min-throughput-kbps 500 proxies.txt
 netvex check --baseline-ip 198.51.100.10 --metadata-file ip-metadata.csv.gz --save proxies.txt
 netvex inspect socks5://127.0.0.1:1080 --allow-private-proxies --target https://example.com/
+printf '%s\n' "$PROXY_URI" | netvex inspect - --target https://example.com/
 netvex import --protocol socks5 raw.txt > normalized.txt
 netvex check --input-format json --repeat 5 --save proxies.json
 netvex results --run latest --status ok --sort score --descending
@@ -421,7 +422,9 @@ the resulting file as a secret.
 (`host:port:user:pass`), or your own using `{protocol}`, `{user}`, `{pass}`,
 `{host}`, `{port}`, `{hostport}`, and `{uri}`.
 
-`--keep-partial` changes only the interruption policy for working output.
+`--keep-partial` also publishes `--save`, `--summary-output`, and the other reports
+after an interruption, marked `interrupted` in the summary. Without it an interrupted
+run saves nothing. Its effect on working output:
 After `Ctrl-C`, NetVex atomically publishes proxies that already qualified as
 `ok`; without it, the previous output remains untouched. Checkpoints remain the
 preferred mechanism when a run will be resumed.

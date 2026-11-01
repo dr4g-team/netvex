@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -1429,5 +1430,97 @@ func TestThroughputSurvivesCoarseClocks(t *testing.T) {
 	}
 	if got := throughputKBPS(0, 0); got != 0 {
 		t.Fatalf("empty body: %v", got)
+	}
+}
+
+func TestLocalExhaustionPausesNewAttempts(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.Repeat = 2
+	c.Config.MinSuccessRate = 0.5
+	c.Config.RetryBackoff = 0
+	var times []time.Time
+	c.Connector.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		times = append(times, time.Now())
+		return nil, syscall.EMFILE
+	}
+	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	if result.Status != model.StatusInconclusive || len(times) != 2 {
+		t.Fatalf("status=%s dials=%d", result.Status, len(times))
+	}
+	if gap := times[1].Sub(times[0]); gap < localBackoff-20*time.Millisecond {
+		t.Fatalf("attempts only %s apart", gap)
+	}
+	if c.localPauses.Load() != 2 {
+		t.Fatalf("pauses=%d", c.localPauses.Load())
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	c.noteLocalExhaustion(model.Observation{Code: "local_resource_exhausted"})
+	if c.waitTurn(ctx) {
+		t.Fatal("cancelled wait succeeded")
+	}
+}
+
+func TestRedirectsShareOneDNSLookupPerOrigin(t *testing.T) {
+	c := baseChecker("http://target.test/start")
+	c.Config.Repeat = 1
+	c.Config.MaxRedirects = 3
+	var calls atomic.Int64
+	c.Policy.Resolver = fixedResolver{ips: []netip.Addr{netip.MustParseAddr("93.184.216.34")}, calls: &calls}
+	var served atomic.Int64
+	c.Connector.DialContext = pipeDial(func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		_, _ = http.ReadRequest(reader)
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+		_, _ = http.ReadRequest(reader)
+		if step := served.Add(1); step < 3 {
+			fmt.Fprintf(conn, "HTTP/1.1 302 Found\r\nLocation: /next/%d?token=x\r\nContent-Length: 0\r\n\r\n", step)
+			return
+		}
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+	})
+	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	if result.Status != model.StatusOK {
+		t.Fatalf("result=%+v", result)
+	}
+	if calls.Load() > 2 {
+		t.Fatalf("%d lookups for one origin", calls.Load())
+	}
+	c.resolveMu.Lock()
+	entries := len(c.resolved)
+	c.resolveMu.Unlock()
+	if entries > 2 {
+		t.Fatalf("redirect paths grew the cache to %d entries", entries)
+	}
+}
+
+func TestRedirectWithCredentialsStaysBlocked(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.Repeat = 1
+	c.Connector.DialContext = pipeDial(func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		_, _ = http.ReadRequest(reader)
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+		_, _ = http.ReadRequest(reader)
+		_, _ = io.WriteString(conn, "HTTP/1.1 302 Found\r\nLocation: http://user:pw@target.test/\r\nContent-Length: 0\r\n\r\n")
+	})
+	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	if result.Status != model.StatusPolicyBlock || result.Observations[0].Code != "redirect_blocked" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestJSONPathSupportsArrayIndexes(t *testing.T) {
+	var document any
+	if err := json.Unmarshal([]byte(`{"items":[{"id":7},{"id":8}],"name":"x"}`), &document); err != nil {
+		t.Fatal(err)
+	}
+	if value, ok := jsonPath(document, []string{"items", "1", "id"}); !ok || fmt.Sprint(value) != "8" {
+		t.Fatalf("value=%v ok=%v", value, ok)
+	}
+	for _, path := range [][]string{{"items", "2"}, {"items", "-1"}, {"items", "first"}, {"name", "0"}, {"missing"}} {
+		if _, ok := jsonPath(document, path); ok {
+			t.Fatalf("path %v matched", path)
+		}
 	}
 }

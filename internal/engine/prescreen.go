@@ -68,7 +68,7 @@ func (c *Checker) screen(ctx context.Context, connector protocol.Connector, prox
 		if attempt > 0 && !c.waitBackoff(ctx, proxy, attempt-1) {
 			break
 		}
-		if !c.waitRate(ctx) {
+		if !c.waitTurn(ctx) {
 			break
 		}
 		start := time.Now()
@@ -78,6 +78,7 @@ func (c *Checker) screen(ctx context.Context, connector protocol.Connector, prox
 			return model.Result{}, true
 		}
 		last = finishError(model.Observation{Attempt: 1, StartedAt: start.UTC(), Protocol: proxy.Protocol, Target: c.targetName(target), Status: model.StatusFailed, Stage: model.StageConnect, Anonymity: "unavailable"}, start, err)
+		c.noteLocalExhaustion(last)
 		if last.Code == "proxy_gateway_blocked" {
 			break
 		}

@@ -360,3 +360,39 @@ func TestOutputStatusAcceptsLists(t *testing.T) {
 		t.Fatalf("code=%d", code)
 	}
 }
+
+func TestInspectLeavesNoFileAndReadsStandardInput(t *testing.T) {
+	proxy, target := connectProxy(t), echoTarget(t)
+	dir := t.TempDir()
+	t.Setenv("TMPDIR", dir)
+	flags := []string{"--allow-private-targets", "--allow-private-proxies", "--target", target}
+	for _, args := range [][]string{
+		append([]string{"inspect", proxy}, flags...),
+		append(append([]string{"inspect"}, flags...), proxy),
+	} {
+		code, out, diag := run(args, "")
+		if code != ExitOK || !strings.Contains(out, proxy) {
+			t.Fatalf("args=%v code=%d out=%q diag=%q", args, code, out, diag)
+		}
+	}
+	code, out, diag := run(append([]string{"inspect", "-"}, flags...), "http://user:secret@"+proxy+"\nignored:1\n")
+	if code != ExitOK || !strings.Contains(out, proxy) || strings.Contains(out, "secret") || strings.Contains(out, "ignored") {
+		t.Fatalf("code=%d out=%q diag=%q", code, out, diag)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 0 {
+		t.Fatalf("temporary files=%v err=%v", entries, err)
+	}
+	for _, args := range [][]string{{"inspect"}, {"inspect", "a:1", "b:2"}} {
+		if code, _, _ := run(args, ""); code != ExitUsage {
+			t.Fatalf("%v code=%d", args, code)
+		}
+	}
+}
+
+func TestDoctorReportsPrescreenWorkers(t *testing.T) {
+	code, out, diag := run([]string{"doctor"}, "")
+	if code != ExitOK || !strings.Contains(out, "prescreen      OK") {
+		t.Fatalf("code=%d out=%q diag=%q", code, out, diag)
+	}
+}

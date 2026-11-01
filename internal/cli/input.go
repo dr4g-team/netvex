@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"syscall"
 
 	"github.com/drag-team/netvex/internal/config"
@@ -13,25 +15,44 @@ import (
 	"github.com/drag-team/netvex/internal/model"
 )
 
+// inspect feeds the proxy through standard input rather than a temporary file,
+// so credentials never reach the disk. "-" reads it from standard input, which
+// also keeps them out of the process list.
 func (c CLI) inspect(args []string) int {
-	if len(args) == 0 || args[0] == "--help" || args[0] == "-h" {
-		fmt.Fprintln(c.Stderr, "usage: netvex inspect PROXY [check options]")
-		if len(args) > 0 {
-			return ExitOK
-		}
+	if len(args) > 0 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Fprintln(c.Stderr, inspectUsage)
+		return ExitOK
+	}
+	fs, _ := c.newFlagSet("inspect")
+	var ignored checkOptions
+	c.addCheckFlags(fs, &ignored)
+	if err := parseArguments(fs, args); err != nil || fs.NArg() != 1 {
+		fmt.Fprintln(c.Stderr, inspectUsage)
 		return ExitUsage
 	}
-	proxy := args[0]
-	tmp, err := os.CreateTemp("", "netvex-inspect-*.txt")
-	if err != nil {
-		return ExitOperational
+	proxy := fs.Arg(0)
+	flags := make([]string, 0, len(args)+3)
+	removed := false
+	for _, arg := range args {
+		if !removed && arg == proxy {
+			removed = true
+			continue
+		}
+		flags = append(flags, arg)
 	}
-	name := tmp.Name()
-	defer os.Remove(name)
-	_, _ = fmt.Fprintln(tmp, proxy)
-	_ = tmp.Close()
-	return c.check(append(append([]string{"--format", "jsonl", "--repeat", "3"}, args[1:]...), name), true)
+	if proxy == "-" {
+		line, err := bufio.NewReader(c.Stdin).ReadString('\n')
+		if err != nil && !errors.Is(err, io.EOF) {
+			fmt.Fprintln(c.Stderr, err)
+			return ExitOperational
+		}
+		proxy = strings.TrimSpace(line)
+	}
+	c.Stdin = strings.NewReader(proxy + "\n")
+	return c.check(append([]string{"--format", "jsonl", "--repeat", "3"}, flags...), true)
 }
+
+const inspectUsage = "usage: netvex inspect PROXY|- [check options]"
 
 func (c CLI) importCmd(args []string) int {
 	fs, buf := c.newFlagSet("import")

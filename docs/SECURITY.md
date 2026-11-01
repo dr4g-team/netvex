@@ -94,6 +94,10 @@ files, refuses replacement unless `--force` is present, refuses to target an
 input path, and commits by same-directory atomic replacement only after a
 complete run. Its contents must be handled as secrets.
 
+`inspect` passes the proxy through memory and never writes it to a file. A proxy
+on the command line is still visible in the process list, so use `netvex inspect -`
+to read it from standard input on shared hosts.
+
 Shard outputs also contain full credentials and use mode 0600. Resume
 checkpoints are redacted. Credentialed result IDs are HMACs keyed by a private
 `identity.key` in the data directory, which keeps low-entropy credentials from

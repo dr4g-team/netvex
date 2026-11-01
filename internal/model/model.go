@@ -17,7 +17,7 @@ import (
 
 type Protocol string
 
-const SchemaVersion = 6
+const SchemaVersion = 7
 
 // MaxMessageBytes bounds every persisted diagnostic. Messages can quote values
 // chosen by a remote proxy, so the bound must hold before results reach storage.
@@ -423,6 +423,7 @@ type RunSummary struct {
 	FailureStages map[Stage]int            `json:"failure_stages,omitempty"`
 	Targets       map[string]TargetSummary `json:"targets,omitempty"`
 	TargetHealth  map[string]TargetHealth  `json:"target_health,omitempty"`
+	Interrupted   bool                     `json:"interrupted,omitempty"`
 	Canary        *CanaryReport            `json:"canary,omitempty"`
 	Quality       *QualityReport           `json:"quality,omitempty"`
 }

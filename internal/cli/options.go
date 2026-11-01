@@ -80,7 +80,7 @@ func (c CLI) addCheckFlags(fs *flag.FlagSet, o *checkOptions) {
 	fs.Float64Var(&o.minThroughput, "min-throughput-kbps", -1, "minimum measured response-body throughput in decimal KB/s")
 	fs.Var(&o.requireText, "require-text", "case-insensitive response substring required for success (repeatable)")
 	fs.Var(&o.rejectText, "reject-text", "case-insensitive response substring that fails validation (repeatable)")
-	fs.Var(&o.expectJSON, "expect-json", "required dot.path=value JSON assertion (repeatable)")
+	fs.Var(&o.expectJSON, "expect-json", "required dot.path=value JSON assertion; numeric segments index arrays (repeatable)")
 	fs.StringVar(&o.expectedBodySHA, "expect-sha256", "", "required SHA-256 of the final response body")
 	fs.StringVar(&o.baselineIP, "baseline-ip", "", "local public IP used for evidence-based anonymity classification")
 	fs.StringVar(&o.metadataFile, "metadata-file", "", "offline exit-IP metadata CSV or CSV.gz database")

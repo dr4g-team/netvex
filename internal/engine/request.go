@@ -189,7 +189,12 @@ func throughputKBPS(bytes int64, duration time.Duration) float64 {
 }
 
 func (c *Checker) followRedirect(ctx context.Context, p model.Proxy, u *url.URL, left int, prior model.Observation, rules compiledResponseRules) (model.Observation, error) {
-	dest, err := c.Policy.Resolve(ctx, u.String())
+	// The cache is keyed by origin because paths are chosen by the remote side and
+	// would otherwise grow it without bound.
+	origin := *u
+	origin.Path, origin.RawPath, origin.RawQuery, origin.Fragment = "", "", "", ""
+	dest, err := c.resolve(ctx, origin.String())
+	dest.URL = u
 	if err != nil {
 		if errors.Is(err, policy.ErrBlocked) {
 			return prior, &protocol.Error{Stage: model.StagePolicy, Status: model.StatusPolicyBlock, Code: "redirect_blocked", Detail: "redirect destination blocked: " + err.Error(), Err: err}

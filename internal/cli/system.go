@@ -112,6 +112,7 @@ func (c CLI) doctor(args []string) int {
 			}
 		}
 		fmt.Fprintf(c.Stdout, "auto workers   OK  recommended=%d\n", recommendedConcurrency())
+		fmt.Fprintf(c.Stdout, "prescreen      OK  workers=%d enabled=%t\n", boundedPrescreenWorkers(cfg.PrescreenWorkers, cfg.Concurrency), cfg.Prescreen)
 		if cfg.ProxyDNSCacheTTL > 0 {
 			fmt.Fprintf(c.Stdout, "proxy DNS      OK  cache_ttl=%s bounded_entries=%d\n", cfg.ProxyDNSCacheTTL, min(cfg.MaxInputEntries, 4096))
 		} else {

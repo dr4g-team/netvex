@@ -14,7 +14,7 @@ Build metadata is derived from the source commit, and
 `make reproducibility-check` verifies byte-identical binaries for a fixed tree.
 
 The development line is `0.8.0-dev`; the latest published tag is `v0.7.0`, and
-result schema version 6 is current. The project is in active development and
+result schema version 7 is current. The project is in active development and
 the implemented command surface is usable.
 It is not represented as a completed independent security audit.
 

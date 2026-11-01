@@ -4,10 +4,14 @@ Machine formats are UTF-8. JSON output is one streamed array, JSONL contains
 one complete result object per line, and CSV has a stable header row. Times use RFC 3339 UTC and durations use
 milliseconds as floating-point values.
 
-The current `schema_version` is 6. `netvex schema result` and
+The current `schema_version` is 7. `netvex schema result` and
 `netvex schema summary` print JSON Schema derived from the model, and
 [docs/schemas](schemas) holds the published copies; a test fails if they drift.
 Readers should tolerate unknown fields and missing fields from older runs.
+
+Version 7 adds the summary field `interrupted`, set when `--keep-partial` publishes
+an unfinished run. Its counts cover only completed proxies, and `input` may be empty
+if reading had not finished.
 
 Version 6 scopes `id` to the account for credentialed proxies, so several accounts
 on one gateway are separate results; such IDs differ from those written by earlier

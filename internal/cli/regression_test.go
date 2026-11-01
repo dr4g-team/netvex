@@ -286,3 +286,87 @@ func TestPrescreenFlagBounds(t *testing.T) {
 		t.Fatalf("workers=%d", workers)
 	}
 }
+
+func interruptRun(t *testing.T, cli CLI, args []string) int {
+	t.Helper()
+	done := make(chan int, 1)
+	go func() { done <- cli.Run(args) }()
+	time.Sleep(300 * time.Millisecond)
+	process, err := os.FindProcess(os.Getpid())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := process.Signal(os.Interrupt); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case code := <-done:
+		return code
+	case <-time.After(5 * time.Second):
+		t.Fatal("run did not stop")
+		return -1
+	}
+}
+
+func TestKeepPartialPublishesInterruptedRun(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("self-delivered interrupts are not available on Windows")
+	}
+	hanging := proxyFixture(t, func(client net.Conn, _ *bufio.Reader, _ *http.Request) {
+		_, _ = io.Copy(io.Discard, client)
+	})
+	proxy, target := connectProxy(t), echoTarget(t)
+	dir := t.TempDir()
+	summaryPath := filepath.Join(dir, "summary.json")
+	args := []string{"check", "--quiet", "--repeat", "1", "--concurrency", "2", "--per-target", "2", "--input-format", "text", "--allow-private-targets", "--allow-private-proxies", "--target", target, "--save", "--data-dir", dir, "--summary-output", summaryPath, "--keep-partial"}
+	var out, diag bytes.Buffer
+	stdin := &blockedStdin{payload: []byte(proxy + "\n" + hanging + "\n\n"), release: make(chan struct{})}
+	t.Cleanup(func() { close(stdin.release) })
+	if code := interruptRun(t, CLI{Stdout: &out, Stderr: &diag, Stdin: stdin}, args); code != ExitInterrupted {
+		t.Fatalf("code=%d diag=%q", code, diag.String())
+	}
+	payload, err := os.ReadFile(summaryPath)
+	if err != nil {
+		t.Fatalf("summary missing: %v diag=%q", err, diag.String())
+	}
+	var summary model.RunSummary
+	if err := json.Unmarshal(payload, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if !summary.Interrupted || summary.Successful != 1 || summary.RunID == "" {
+		t.Fatalf("summary=%+v", summary)
+	}
+	path, err := store.ResolveRun(dir, "latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ok := 0
+	if err := store.ReadResults(path, func(result model.Result) error {
+		if result.Status == model.StatusOK {
+			ok++
+		}
+		return nil
+	}); err != nil || ok != 1 {
+		t.Fatalf("ok=%d err=%v", ok, err)
+	}
+}
+
+func TestInterruptedRunSavesNothingWithoutKeepPartial(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("self-delivered interrupts are not available on Windows")
+	}
+	hanging := proxyFixture(t, func(client net.Conn, _ *bufio.Reader, _ *http.Request) {
+		_, _ = io.Copy(io.Discard, client)
+	})
+	dir := t.TempDir()
+	stdin := &blockedStdin{payload: []byte(hanging + "\n\n"), release: make(chan struct{})}
+	t.Cleanup(func() { close(stdin.release) })
+	var out, diag bytes.Buffer
+	args := []string{"check", "--quiet", "--repeat", "1", "--input-format", "text", "--allow-private-targets", "--allow-private-proxies", "--target", "http://127.0.0.1:9/", "--save", "--data-dir", dir}
+	if code := interruptRun(t, CLI{Stdout: &out, Stderr: &diag, Stdin: stdin}, args); code != ExitInterrupted {
+		t.Fatalf("code=%d diag=%q", code, diag.String())
+	}
+	if _, err := store.ResolveRun(dir, "latest"); err == nil {
+		t.Fatal("interrupted run was published without keep-partial")
+	}
+}

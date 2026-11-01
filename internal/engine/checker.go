@@ -48,6 +48,8 @@ type Checker struct {
 	expectCountries    map[string]struct{}
 	canaryProbe        func(context.Context, string) model.TargetHealth
 	canaryDown         atomic.Pointer[map[string]struct{}]
+	localPauseUntil    atomic.Int64
+	localPauses        atomic.Int64
 	canaryChecks       atomic.Int64
 	canaryFailures     atomic.Int64
 	canaryOutages      atomic.Int64
@@ -149,10 +151,11 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		if intervalDue && !c.waitInterval(ctx) {
 			break
 		}
-		if !c.waitTargetHealthy(ctx, target) || !c.waitRate(ctx) {
+		if !c.waitTargetHealthy(ctx, target) || !c.waitTurn(ctx) {
 			break
 		}
 		obs := c.attempt(ctx, p, target, i+1)
+		c.noteLocalExhaustion(obs)
 		c.reclassifyDuringOutage(&obs, target)
 		if r.Observations == nil {
 			r.Observations = make([]model.Observation, 0, min(plan.attempts, 8))

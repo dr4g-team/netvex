@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/netip"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -229,12 +230,20 @@ func containsIP(value string, expected netip.Addr) bool {
 func jsonPath(value any, path []string) (any, bool) {
 	current := value
 	for _, key := range path {
-		object, ok := current.(map[string]any)
-		if !ok {
-			return nil, false
-		}
-		current, ok = object[key]
-		if !ok {
+		switch container := current.(type) {
+		case map[string]any:
+			next, ok := container[key]
+			if !ok {
+				return nil, false
+			}
+			current = next
+		case []any:
+			index, err := strconv.Atoi(key)
+			if err != nil || index < 0 || index >= len(container) {
+				return nil, false
+			}
+			current = container[index]
+		default:
 			return nil, false
 		}
 	}
