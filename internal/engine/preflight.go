@@ -2,7 +2,6 @@ package engine
 
 import (
 	"context"
-	"crypto/tls"
 	"fmt"
 	"io"
 	"net"
@@ -49,14 +48,7 @@ func (c *Checker) preflightTarget(parent context.Context, target string) model.T
 	if err != nil {
 		return model.TargetHealth{Status: "failed", Code: "resolve", Message: "target resolution or policy check failed", LatencyMS: ms(time.Since(started))}
 	}
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: destination.Host}
-	if c.TLSConfig != nil {
-		tlsConfig = c.TLSConfig.Clone()
-		tlsConfig.ServerName = destination.Host
-		if tlsConfig.MinVersion == 0 {
-			tlsConfig.MinVersion = tls.VersionTLS12
-		}
-	}
+	tlsConfig := c.destinationTLS(destination.Host)
 	dialer := &net.Dialer{Timeout: c.Config.ConnectTimeout, KeepAlive: -1}
 	transport := &http.Transport{
 		Proxy: nil,

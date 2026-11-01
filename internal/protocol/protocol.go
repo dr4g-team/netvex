@@ -54,13 +54,34 @@ type TimedConn struct {
 type Connector struct {
 	ConnectTimeout time.Duration
 	AllowRemoteDNS bool
+	ClassicalKEX   bool
 	DialContext    func(context.Context, string, string) (net.Conn, error)
 	Dialer         *net.Dialer
 	ProxyDNS       *ProxyDNSCache
 	TLSConfig      *tls.Config
 }
 
+// Dialed is a proxy connection opened before any protocol negotiation.
+type Dialed struct {
+	Conn    net.Conn
+	Connect time.Duration
+}
+
+// Close releases a connection that was not handed to OpenDialed.
+func (d *Dialed) Close() {
+	if d != nil && d.Conn != nil {
+		_ = d.Conn.Close()
+		d.Conn = nil
+	}
+}
+
 func (c Connector) Open(ctx context.Context, proxy model.Proxy, dest policy.Destination) (TimedConn, error) {
+	return c.OpenDialed(ctx, proxy, dest, nil)
+}
+
+// Dial performs only proxy DNS and the TCP handshake. Separating it lets callers
+// reject dead gateways before they occupy any destination capacity.
+func (c Connector) Dial(ctx context.Context, proxy model.Proxy) (Dialed, error) {
 	start := time.Now()
 	connectCtx := ctx
 	cancelConnect := func() {}
@@ -73,7 +94,7 @@ func (c Connector) Open(ctx context.Context, proxy model.Proxy, dest policy.Dest
 		var err error
 		address, err = c.ProxyDNS.Address(connectCtx, proxy.Host, proxy.Port)
 		if err != nil {
-			return TimedConn{}, classifyNet(model.StageConnect, "proxy_dns", err)
+			return Dialed{}, classifyNet(model.StageConnect, "proxy_dns", err)
 		}
 	}
 	var conn net.Conn
@@ -87,11 +108,26 @@ func (c Connector) Open(ctx context.Context, proxy model.Proxy, dest policy.Dest
 		dialer := net.Dialer{KeepAlive: -1}
 		conn, err = dialer.DialContext(connectCtx, "tcp", address)
 	}
-	connectTime := time.Since(start)
 	if err != nil {
-		return TimedConn{}, classifyNet(model.StageConnect, "proxy_connect", err)
+		return Dialed{}, classifyNet(model.StageConnect, "proxy_connect", err)
 	}
-	conn = watchContext(ctx, conn)
+	return Dialed{Conn: conn, Connect: time.Since(start)}, nil
+}
+
+// OpenDialed negotiates the proxy protocol, consuming pre when it still holds a
+// connection and dialing otherwise.
+func (c Connector) OpenDialed(ctx context.Context, proxy model.Proxy, dest policy.Destination, pre *Dialed) (TimedConn, error) {
+	var dialed Dialed
+	if pre != nil && pre.Conn != nil {
+		dialed, *pre = *pre, Dialed{}
+	} else {
+		var err error
+		if dialed, err = c.Dial(ctx, proxy); err != nil {
+			return TimedConn{}, err
+		}
+	}
+	connectTime := dialed.Connect
+	conn := watchContext(ctx, dialed.Conn)
 	ok := false
 	defer func() {
 		if !ok {
@@ -113,6 +149,9 @@ func (c Connector) Open(ctx context.Context, proxy model.Proxy, dest policy.Dest
 				tlsConfig.MinVersion = tls.VersionTLS12
 			}
 			tlsConfig.ServerName = proxy.Host
+		}
+		if c.ClassicalKEX {
+			tlsConfig.CurvePreferences = []tls.CurveID{tls.X25519}
 		}
 		secure := tls.Client(conn, tlsConfig)
 		if err := secure.HandshakeContext(ctx); err != nil {
@@ -340,6 +379,43 @@ func ReadResponseLimited(conn net.Conn, req *http.Request, maxHeader int) (*http
 		return nil, nil, errors.New("HTTP response headers require CRLF line endings")
 	}
 	return resp, &readerConn{Conn: conn, r: source}, nil
+}
+
+// sniffProbe is a SOCKS5 greeting offering no-auth and username/password, followed
+// by a blank line. SOCKS5 servers answer the greeting and HTTP servers reject the
+// malformed request line, so one round trip separates the families without
+// sending credentials or contacting any destination.
+var sniffProbe = []byte{5, 2, 0, 2, '\r', '\n', '\r', '\n'}
+
+// Sniff identifies the protocol spoken on conn, or returns "" when the reply is
+// silent or unrecognized. The result is a hint and the connection is spent.
+func Sniff(conn net.Conn, timeout time.Duration) model.Protocol {
+	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return ""
+	}
+	if err := writeFull(conn, sniffProbe); err != nil {
+		return ""
+	}
+	reply := make([]byte, 2)
+	if _, err := io.ReadFull(conn, reply); err != nil {
+		return ""
+	}
+	return classifySniff(reply[0], reply[1])
+}
+
+func classifySniff(first, second byte) model.Protocol {
+	switch {
+	case first == 5 && (second == 0 || second == 2 || second == 0xff):
+		return model.ProtocolSOCKS5
+	case first == 'H' && second == 'T':
+		return model.ProtocolHTTP
+	case first == 0x15 && second == 3:
+		return model.ProtocolHTTPS
+	case first == 0 && second >= 90 && second <= 93:
+		return model.ProtocolSOCKS4
+	default:
+		return ""
+	}
 }
 
 func socks4Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, remote bool) error {

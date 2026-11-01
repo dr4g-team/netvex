@@ -207,7 +207,10 @@ type checkOptions struct {
 	progressInterval                                            string
 	targets, allowHosts, requireText, rejectText, expectJSON    stringsFlag
 	allowPrivate, allowRemoteDNS, save, requireSuccess, verbose bool
-	allowPrivateProxies                                         bool
+	allowPrivateProxies, prescreen, noConnectRetry              bool
+	tlsClassicalKEX                                             bool
+	prescreenWorkers, prescreenRetries                          int
+	prescreenTimeout                                            string
 	dataDir                                                     string
 	maxRedirects                                                int
 	requireCount                                                int
@@ -321,6 +324,12 @@ func (c CLI) addCheckFlags(fs *flag.FlagSet, o *checkOptions) {
 	fs.BoolVar(&o.allowPrivate, "allow-private-targets", false, "allow private/loopback validation destinations (dangerous)")
 	fs.BoolVar(&o.allowRemoteDNS, "allow-remote-dns", false, "allow proxy-side DNS for SOCKS4a/SOCKS5 and HTTP CONNECT/forwarding (reduces rebinding protection)")
 	fs.BoolVar(&o.allowPrivateProxies, "allow-private-proxies", false, "allow proxy gateways on private, loopback, or special-purpose addresses")
+	fs.BoolVar(&o.prescreen, "prescreen", false, "reject unreachable gateways with a wide TCP-only stage before validation")
+	fs.IntVar(&o.prescreenWorkers, "prescreen-concurrency", 0, "concurrent prescreen connects (1..65536)")
+	fs.IntVar(&o.prescreenRetries, "prescreen-retries", -1, "extra prescreen connects before a gateway is rejected (0..3)")
+	fs.StringVar(&o.prescreenTimeout, "prescreen-timeout", "", "prescreen connect timeout; 0 uses connect-timeout")
+	fs.BoolVar(&o.noConnectRetry, "no-connect-retry", false, "do not repeat measurements after a TCP connect failure")
+	fs.BoolVar(&o.tlsClassicalKEX, "tls-classical-kex", false, "use X25519 only for validation TLS, trading post-quantum key exchange for CPU")
 	fs.BoolVar(&o.retryPermanent, "retry-permanent", false, "repeat authentication, policy, and invalid-protocol failures")
 	fs.BoolVar(&o.stopOnSuccess, "stop-on-success", false, "stop remaining measurements once the reliability threshold is reached")
 	fs.BoolVar(&o.noDeduplicate, "no-deduplicate", false, "disable exact deduplication to use bounded parser memory")
@@ -492,6 +501,24 @@ func (c CLI) loadCheck(o checkOptions) (config.Config, model.Protocol, output.Fo
 	if o.allowPrivateProxies || o.explicit["allow-private-proxies"] {
 		cfg.AllowPrivateProxy = o.allowPrivateProxies
 	}
+	if o.prescreen || o.explicit["prescreen"] {
+		cfg.Prescreen = o.prescreen
+	}
+	if o.prescreenWorkers != 0 {
+		cfg.PrescreenWorkers = o.prescreenWorkers
+	}
+	if o.prescreenRetries >= 0 {
+		cfg.PrescreenRetries = o.prescreenRetries
+	}
+	if o.prescreenTimeout != "" {
+		cfg.PrescreenRaw = o.prescreenTimeout
+	}
+	if o.noConnectRetry || o.explicit["no-connect-retry"] {
+		cfg.SkipConnectRetry = o.noConnectRetry
+	}
+	if o.tlsClassicalKEX || o.explicit["tls-classical-kex"] {
+		cfg.TLSClassicalKEX = o.tlsClassicalKEX
+	}
 	if o.retryPermanent || o.explicit["retry-permanent"] {
 		cfg.RetryPermanent = o.retryPermanent
 	}
@@ -572,6 +599,7 @@ func applyProfile(cfg *config.Config, name string) error {
 		cfg.RequestTimeoutRaw = "8s"
 		cfg.RetryBackoffRaw = "0s"
 		cfg.ProxyDNSCacheRaw = "1m"
+		cfg.Prescreen = true
 	case "balanced":
 		cfg.Repeat = 2
 		cfg.MinSuccessRate = 0.5
@@ -970,7 +998,19 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		parseErr <- e
 	}()
 	runner := engine.Engine{Workers: cfg.Concurrency, QueueSize: cfg.QueueSize, Processor: checker}
-	results := runner.Run(ctx, jobs)
+	var validationInput <-chan model.Proxy = jobs
+	var unreachable <-chan model.Result
+	if cfg.Prescreen {
+		workers := boundedPrescreenWorkers(cfg.PrescreenWorkers, cfg.Concurrency)
+		if workers < cfg.PrescreenWorkers {
+			fmt.Fprintf(c.Stderr, "prescreen concurrency reduced to %d by the file descriptor limit\n", workers)
+		}
+		validationInput, unreachable = checker.Prescreen(ctx, jobs, workers, cfg.QueueSize)
+	}
+	results := runner.Run(ctx, validationInput)
+	if unreachable != nil {
+		results = engine.Merge(results, unreachable, cfg.QueueSize)
+	}
 	var writer *output.Writer
 	if !o.quiet {
 		writer = output.New(c.Stdout, outFmt, color)
@@ -1282,7 +1322,8 @@ func runConfiguration(cfg config.Config, proto model.Protocol, o checkOptions) m
 		QueueSize: cfg.QueueSize, PerTarget: cfg.PerTarget, RateLimit: cfg.RateLimit,
 		Repeat: cfg.Repeat, MinSuccessRate: cfg.MinSuccessRate, ConnectTimeout: cfg.ConnectTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(), AutoProbeTimeout: cfg.AutoProbeTimeout.String(),
 		RetryBackoff: cfg.RetryBackoff.String(), StopOnSuccess: cfg.StopOnSuccess,
-		RetryPermanent: cfg.RetryPermanent, AllowRemoteDNS: cfg.AllowRemoteDNS, AllowPrivateProxy: cfg.AllowPrivateProxy, ProxyDNSCacheTTL: cfg.ProxyDNSCacheTTL.String(),
+		RetryPermanent: cfg.RetryPermanent, AllowRemoteDNS: cfg.AllowRemoteDNS, AllowPrivateProxy: cfg.AllowPrivateProxy,
+		SkipConnectRetry: cfg.SkipConnectRetry, TLSClassicalKEX: cfg.TLSClassicalKEX, Prescreen: cfg.Prescreen, PrescreenWorkers: prescreenWorkers(cfg), PrescreenRetries: cfg.PrescreenRetries, ProxyDNSCacheTTL: cfg.ProxyDNSCacheTTL.String(),
 		MaxResponseBytes: cfg.MaxResponseBytes, IntelligenceBytes: min(cfg.IntelligenceBytes, cfg.MaxResponseBytes), MinResponseBytes: cfg.MinResponseBytes, MinThroughput: cfg.MinThroughputKBPS,
 		ContentRules:    len(cfg.RequireText) + len(cfg.RejectText) + len(cfg.ExpectJSON),
 		MetadataEnabled: cfg.MetadataFile != "",
@@ -1292,6 +1333,13 @@ func runConfiguration(cfg config.Config, proto model.Protocol, o checkOptions) m
 		KeepPartial: o.keepPartial, Scenario: cfg.ScenarioName, Label: o.label,
 		Deduplicate: !o.noDeduplicate, MaxInputEntries: cfg.MaxInputEntries, ValidationTarget: targets,
 	}
+}
+
+func prescreenWorkers(cfg config.Config) int {
+	if cfg.Prescreen {
+		return cfg.PrescreenWorkers
+	}
+	return 0
 }
 
 func (c CLI) runs(args []string) int {
@@ -1873,6 +1921,22 @@ func recommendedConcurrency() int {
 		recommended = 1024
 	}
 	return recommended
+}
+
+// prescreenReservedDescriptors keeps room for validation sockets, output files,
+// and resolver traffic when the prescreen stage is sized against the limit.
+const prescreenReservedDescriptors = 128
+
+func boundedPrescreenWorkers(requested, validationWorkers int) int {
+	soft, _, available := fileDescriptorLimit()
+	if !available {
+		return requested
+	}
+	reserve := uint64(validationWorkers) + prescreenReservedDescriptors
+	if soft <= reserve {
+		return 1
+	}
+	return int(min(uint64(requested), soft-reserve))
 }
 
 func topCounts(counts map[string]int, limit int) string {

@@ -343,6 +343,11 @@ type RunConfiguration struct {
 	RetryPermanent    bool     `json:"retry_permanent_failures"`
 	AllowRemoteDNS    bool     `json:"allow_remote_dns"`
 	AllowPrivateProxy bool     `json:"allow_private_proxies,omitempty"`
+	SkipConnectRetry  bool     `json:"skip_connect_retry,omitempty"`
+	TLSClassicalKEX   bool     `json:"tls_classical_kex,omitempty"`
+	Prescreen         bool     `json:"prescreen,omitempty"`
+	PrescreenWorkers  int      `json:"prescreen_concurrency,omitempty"`
+	PrescreenRetries  int      `json:"prescreen_retries,omitempty"`
 	ProxyDNSCacheTTL  string   `json:"proxy_dns_cache_ttl,omitempty"`
 	MaxResponseBytes  int64    `json:"max_response_bytes"`
 	IntelligenceBytes int64    `json:"intelligence_body_bytes"`

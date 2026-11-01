@@ -737,3 +737,140 @@ func TestGatewayGuardChecksConnectedAddress(t *testing.T) {
 		t.Fatalf("classified=%+v", classified)
 	}
 }
+
+func TestSniffClassifiesReplies(t *testing.T) {
+	for _, test := range []struct {
+		reply []byte
+		want  model.Protocol
+	}{
+		{[]byte{5, 0}, model.ProtocolSOCKS5},
+		{[]byte{5, 2}, model.ProtocolSOCKS5},
+		{[]byte{5, 0xff}, model.ProtocolSOCKS5},
+		{[]byte("HTTP/1.1 400 Bad Request\r\n\r\n"), model.ProtocolHTTP},
+		{[]byte{0x15, 3, 3, 0, 2, 2, 50}, model.ProtocolHTTPS},
+		{[]byte{0, 91, 0, 0, 0, 0, 0, 0}, model.ProtocolSOCKS4},
+		{[]byte{0xde, 0xad}, ""},
+		{[]byte{5}, ""},
+		{nil, ""},
+	} {
+		client, server := net.Pipe()
+		go func() {
+			probe := make([]byte, len(sniffProbe))
+			_, _ = io.ReadFull(server, probe)
+			_, _ = server.Write(test.reply)
+			_ = server.Close()
+		}()
+		if got := Sniff(client, time.Second); got != test.want {
+			t.Fatalf("reply %x: got %q want %q", test.reply, got, test.want)
+		}
+		_ = client.Close()
+	}
+}
+
+func TestSniffHonorsTimeoutOnSilentServers(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	go func() { _, _ = io.Copy(io.Discard, server) }()
+	started := time.Now()
+	if got := Sniff(client, 50*time.Millisecond); got != "" {
+		t.Fatalf("got=%q", got)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("sniff ignored its timeout: %s", elapsed)
+	}
+}
+
+func TestOpenDialedConsumesPreparedConnectionOnce(t *testing.T) {
+	var dials atomic.Int64
+	script := func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		_, _ = http.ReadRequest(reader)
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+	}
+	connector := pipeConnector(script)
+	base := connector.DialContext
+	connector.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		dials.Add(1)
+		return base(ctx, network, address)
+	}
+	proxy := model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy", Port: 8080}
+	dialed, err := connector.Dial(context.Background(), proxy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	opened, err := connector.OpenDialed(context.Background(), proxy, destination(), &dialed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = opened.Conn.Close()
+	if dialed.Conn != nil || dials.Load() != 1 {
+		t.Fatalf("prepared connection not consumed: dials=%d", dials.Load())
+	}
+	opened, err = connector.OpenDialed(context.Background(), proxy, destination(), &dialed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = opened.Conn.Close()
+	if dials.Load() != 2 {
+		t.Fatalf("spent connection reused: dials=%d", dials.Load())
+	}
+	(&Dialed{}).Close()
+	(*Dialed)(nil).Close()
+}
+
+func FuzzSOCKS5Reply(f *testing.F) {
+	f.Add([]byte{5, 0, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+	f.Add([]byte{5, 2, 1, 0, 5, 0, 0, 3, 4, 'h', 'o', 's', 't', 0, 80})
+	f.Add([]byte{5, 0, 5, 1, 0, 1})
+	f.Add([]byte{5, 0, 5, 0, 0, 3, 0})
+	f.Add([]byte{})
+	proxy := model.Proxy{Protocol: model.ProtocolSOCKS5, Host: "proxy", Port: 1080, Credentials: &model.Credentials{Username: "u", Password: "p"}}
+	f.Fuzz(func(t *testing.T, reply []byte) {
+		client, server := net.Pipe()
+		defer client.Close()
+		go func() {
+			defer server.Close()
+			go func() { _, _ = io.Copy(io.Discard, server) }()
+			_, _ = server.Write(reply)
+		}()
+		_ = client.SetDeadline(time.Now().Add(100 * time.Millisecond))
+		method, err := socks5Connect(client, proxy, destination(), false)
+		if err == nil && method != "none" && method != "username_password" {
+			t.Fatalf("unknown method %q", method)
+		}
+	})
+}
+
+func FuzzSOCKS4Reply(f *testing.F) {
+	f.Add([]byte{0, 90, 0, 0, 0, 0, 0, 0})
+	f.Add([]byte{4, 91, 0, 0, 0, 0, 0, 0})
+	f.Add([]byte{0})
+	proxy := model.Proxy{Protocol: model.ProtocolSOCKS4, Host: "proxy", Port: 1080}
+	f.Fuzz(func(t *testing.T, reply []byte) {
+		client, server := net.Pipe()
+		defer client.Close()
+		go func() {
+			defer server.Close()
+			go func() { _, _ = io.Copy(io.Discard, server) }()
+			_, _ = server.Write(reply)
+		}()
+		_ = client.SetDeadline(time.Now().Add(100 * time.Millisecond))
+		err := socks4Connect(client, proxy, destination(), false)
+		if err == nil && (len(reply) < 8 || reply[1] != 90) {
+			t.Fatalf("accepted reply %x", reply)
+		}
+	})
+}
+
+func FuzzProxyAuthChallenge(f *testing.F) {
+	f.Add(`Basic realm="x"`)
+	f.Add(`Negotiate, NTLM, Digest realm="a,b", qop="auth"`)
+	f.Add(`"unterminated`)
+	f.Fuzz(func(t *testing.T, challenge string) {
+		err := HTTPProxyAuthError(&http.Response{Header: http.Header{"Proxy-Authenticate": {challenge}}}, true)
+		if len(err.Error()) > 4096 {
+			t.Fatalf("unbounded diagnostic: %d bytes", len(err.Error()))
+		}
+	})
+}

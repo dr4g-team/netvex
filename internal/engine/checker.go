@@ -309,7 +309,7 @@ func NewChecker(c config.Config) *Checker {
 	if !c.AllowPrivateProxy {
 		dialer.ControlContext = protocol.GatewayGuard
 	}
-	connector := protocol.Connector{ConnectTimeout: c.ConnectTimeout, AllowRemoteDNS: c.AllowRemoteDNS, Dialer: dialer}
+	connector := protocol.Connector{ConnectTimeout: c.ConnectTimeout, AllowRemoteDNS: c.AllowRemoteDNS, ClassicalKEX: c.TLSClassicalKEX, Dialer: dialer}
 	if c.ProxyDNSCacheTTL > 0 {
 		connector.ProxyDNS = protocol.NewProxyDNSCache(c.ProxyDNSCacheTTL, min(c.MaxInputEntries, 4096))
 	}
@@ -398,26 +398,37 @@ func (c *Checker) rulesFor(target string) compiledResponseRules {
 	return c.buildRules(target)
 }
 
-func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
-	repeats := c.Config.Repeat
-	if c.Config.RotationSamples > repeats {
-		repeats = c.Config.RotationSamples
-	}
-	attemptCount := repeats
+// attemptPlan holds the measurement counts implied by the configuration.
+type attemptPlan struct {
+	repeats  int
+	attempts int
+	required int
+	quorum   int
+}
+
+func (c *Checker) plan() attemptPlan {
+	plan := attemptPlan{repeats: max(c.Config.Repeat, c.Config.RotationSamples)}
+	plan.attempts = plan.repeats
+	plan.required = int(math.Ceil(float64(plan.repeats) * c.Config.MinSuccessRate))
 	if c.Config.TargetMatrix {
-		attemptCount *= len(c.Config.Targets)
-	}
-	required := int(math.Ceil(float64(repeats) * c.Config.MinSuccessRate))
-	quorum := 0
-	if c.Config.TargetMatrix {
-		quorum = c.Config.TargetQuorum
-		if quorum == 0 {
-			quorum = len(c.Config.Targets)
+		plan.attempts *= len(c.Config.Targets)
+		plan.quorum = c.Config.TargetQuorum
+		if plan.quorum == 0 {
+			plan.quorum = len(c.Config.Targets)
 		}
-		required *= quorum
+		plan.required *= plan.quorum
 	}
-	r := model.Result{SchemaVersion: model.SchemaVersion, ID: p.ResultID(c.IdentityKey), Proxy: p.SafeURI(), Endpoint: p.Address(), Protocol: p.Protocol, Label: c.Label, RequiredSuccesses: required, TargetQuorum: quorum, CheckedAt: time.Now().UTC()}
-	for i := 0; i < attemptCount; i++ {
+	return plan
+}
+
+func (c *Checker) newResult(p model.Proxy, plan attemptPlan) model.Result {
+	return model.Result{SchemaVersion: model.SchemaVersion, ID: p.ResultID(c.IdentityKey), Proxy: p.SafeURI(), Endpoint: p.Address(), Protocol: p.Protocol, Label: c.Label, RequiredSuccesses: plan.required, TargetQuorum: plan.quorum, CheckedAt: time.Now().UTC()}
+}
+
+func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
+	plan := c.plan()
+	r := c.newResult(p, plan)
+	for i := 0; i < plan.attempts; i++ {
 		target := c.Config.Targets[i%len(c.Config.Targets)]
 		intervalDue := i > 0 && (!c.Config.TargetMatrix || i%len(c.Config.Targets) == 0)
 		if intervalDue && !c.waitInterval(ctx) {
@@ -428,7 +439,7 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		}
 		obs := c.attempt(ctx, p, target, i+1)
 		if r.Observations == nil {
-			r.Observations = make([]model.Observation, 0, min(attemptCount, 8))
+			r.Observations = make([]model.Observation, 0, min(plan.attempts, 8))
 		}
 		r.Observations = append(r.Observations, obs)
 		r.Attempts++
@@ -436,7 +447,7 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 			r.Successes++
 			r.Protocol = obs.Protocol
 		}
-		if !c.Config.TargetMatrix && obs.Status == model.StatusOK && c.Config.StopOnSuccess && r.Successes >= required {
+		if !c.Config.TargetMatrix && obs.Status == model.StatusOK && c.Config.StopOnSuccess && r.Successes >= plan.required {
 			break
 		}
 		globalPermanent := obs.Status == model.StatusAuthFailed || obs.Status == model.StatusInvalid || obs.Code == "proxy_gateway_blocked" || (!c.Config.TargetMatrix && obs.Status == model.StatusPolicyBlock)
@@ -446,46 +457,48 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		if ctx.Err() != nil {
 			break
 		}
-		remaining := attemptCount - (i + 1)
-		if !c.Config.TargetMatrix && r.Successes+remaining < required {
+		if c.Config.SkipConnectRetry && obs.Status != model.StatusOK && obs.Stage == model.StageConnect {
 			break
 		}
-		if obs.Status != model.StatusOK && i+1 < attemptCount && !c.waitBackoff(ctx, p, i) {
+		remaining := plan.attempts - (i + 1)
+		if !c.Config.TargetMatrix && r.Successes+remaining < plan.required {
+			break
+		}
+		if obs.Status != model.StatusOK && i+1 < plan.attempts && !c.waitBackoff(ctx, p, i) {
 			break
 		}
 	}
+	c.conclude(ctx, &r, p, plan)
+	return r
+}
+
+// conclude derives the verdict and every aggregate from the observations.
+func (c *Checker) conclude(ctx context.Context, r *model.Result, p model.Proxy, plan attemptPlan) {
 	expectedPerTarget := 0
 	if c.Config.TargetMatrix {
-		expectedPerTarget = repeats
+		expectedPerTarget = plan.repeats
 	}
 	r.TargetResults = intel.TargetResults(r.Observations, c.Config.MinSuccessRate, expectedPerTarget, c.expectedTargets...)
 	r.Rotation = intel.Rotation(r.Observations)
+	qualified := r.Successes >= plan.required
 	if c.Config.TargetMatrix {
-		qualified := 0
+		passing := 0
 		for _, targetResult := range r.TargetResults {
 			if targetResult.Qualified {
-				qualified++
+				passing++
 			}
 		}
-		if qualified >= quorum {
-			r.Status = model.StatusOK
-		} else if r.Successes > 0 {
-			r.Status = model.StatusUnreliable
-		} else if len(r.Observations) > 0 {
-			r.Status = r.Observations[len(r.Observations)-1].Status
-		} else {
-			r.Status = model.StatusInterrupted
-		}
-	} else {
-		if r.Successes >= required {
-			r.Status = model.StatusOK
-		} else if r.Successes > 0 {
-			r.Status = model.StatusUnreliable
-		} else if len(r.Observations) > 0 {
-			r.Status = r.Observations[len(r.Observations)-1].Status
-		} else {
-			r.Status = model.StatusInterrupted
-		}
+		qualified = passing >= plan.quorum
+	}
+	switch {
+	case qualified:
+		r.Status = model.StatusOK
+	case r.Successes > 0:
+		r.Status = model.StatusUnreliable
+	case len(r.Observations) > 0:
+		r.Status = r.Observations[len(r.Observations)-1].Status
+	default:
+		r.Status = model.StatusInterrupted
 	}
 	if ctx.Err() != nil && r.Status != model.StatusOK {
 		// A cancelled proxy has no verdict. Recording its last failure would make
@@ -500,7 +513,6 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		r.InputProxy = exportProxy.FullURI()
 	}
 	r.Score = score.Calculate(r.Observations)
-	return r
 }
 
 func (c *Checker) waitInterval(ctx context.Context) bool {
@@ -542,12 +554,24 @@ func (c *Checker) waitBackoff(ctx context.Context, p model.Proxy, retry int) boo
 	}
 }
 
+const (
+	// maxQueuedConnAge limits how long an idle tunnel may wait for a destination
+	// slot. Older connections are redialed because proxies drop idle clients, and
+	// that drop would otherwise be reported as a proxy failure.
+	maxQueuedConnAge = time.Second
+	sniffTimeout     = 1500 * time.Millisecond
+)
+
+// attempt orders its work around one rule: a gateway must prove it is reachable
+// before it occupies destination capacity. Most entries in a real list are dead,
+// and holding a slot through their connect timeout halves throughput. Time spent
+// queueing is reported separately and charged to neither latency nor the timeout.
 func (c *Checker) attempt(parent context.Context, p model.Proxy, target string, n int) model.Observation {
-	ctx, cancel := context.WithTimeout(parent, c.Config.RequestTimeout)
-	defer cancel()
 	start := time.Now()
 	obs := model.Observation{Attempt: n, StartedAt: start.UTC(), Protocol: p.Protocol, Target: c.targetName(target), Status: model.StatusFailed, Stage: model.StageResolve, Anonymity: "unavailable"}
-	dest, err := c.resolve(ctx, target)
+	prepareCtx, cancelPrepare := context.WithTimeout(parent, c.Config.RequestTimeout)
+	defer cancelPrepare()
+	dest, err := c.resolve(prepareCtx, target)
 	obs.Timings.DNSMS = ms(dest.DNSDuration)
 	if err != nil {
 		if errors.Is(err, policy.ErrBlocked) {
@@ -556,15 +580,32 @@ func (c *Checker) attempt(parent context.Context, p model.Proxy, target string, 
 		return finishError(obs, start, &protocol.Error{Stage: model.StageResolve, Status: model.StatusInconclusive, Code: "destination_dns", Detail: "destination DNS resolution failed", Err: err})
 	}
 	obs.ResolvedIP = dest.IP.String()
-	release := c.acquireTarget(ctx, dest.Host)
-	if release == nil {
-		return finishError(obs, start, ctx.Err())
+	dialed, err := c.Connector.Dial(prepareCtx, p)
+	if err != nil {
+		// No protocol can succeed without TCP, so auto mode stops here too.
+		return finishError(obs, start, err)
 	}
-	defer release()
+	defer dialed.Close()
 	protos := []model.Protocol{p.Protocol}
 	if p.Protocol == model.ProtocolAuto {
-		protos = autoProtocols(p.Port, c.Config.AllowRemoteDNS)
+		protos = narrowProtocols(autoProtocols(p.Port, c.Config.AllowRemoteDNS), protocol.Sniff(dialed.Conn, min(sniffTimeout, c.Config.AutoProbeTimeout)))
+		dialed.Close()
 	}
+	queueStart := time.Now()
+	release := c.acquireTarget(parent, dest.Host)
+	queued := time.Since(queueStart)
+	if release == nil {
+		return finishError(obs, start, parent.Err())
+	}
+	defer release()
+	obs.Timings.QueueMS = ms(queued)
+	if queued > maxQueuedConnAge {
+		dialed.Close()
+	}
+	// From here on, elapsed time is measured as if the queue wait never happened.
+	measured := start.Add(queued)
+	ctx, cancel := context.WithTimeout(parent, c.Config.RequestTimeout-time.Since(measured))
+	defer cancel()
 	var best error
 	bestProtocol := p.Protocol
 	bestObservation := obs
@@ -593,7 +634,7 @@ func (c *Checker) attempt(parent context.Context, p model.Proxy, target string, 
 		var e error
 		addresses := destinationCandidates(dest, protoName, c.Config.AllowRemoteDNS)
 		for addressIndex, candidateDest := range addresses {
-			got, e = c.request(candidateCtx, candidate, candidateDest, rules)
+			got, e = c.request(candidateCtx, candidate, candidateDest, rules, &dialed)
 			if addressIndex > 0 {
 				got.DestinationAttempts = addressIndex + 1
 			}
@@ -610,8 +651,9 @@ func (c *Checker) attempt(parent context.Context, p model.Proxy, target string, 
 		got.StartedAt = obs.StartedAt
 		got.Target = obs.Target
 		got.Timings.DNSMS = obs.Timings.DNSMS
+		got.Timings.QueueMS = obs.Timings.QueueMS
 		if e == nil {
-			got.Timings.TotalMS = ms(time.Since(start))
+			got.Timings.TotalMS = ms(time.Since(measured))
 			return got
 		}
 		if best == nil || errorPriority(e) > errorPriority(best) {
@@ -635,7 +677,26 @@ func (c *Checker) attempt(parent context.Context, p model.Proxy, target string, 
 		}
 	}
 	bestObservation.Protocol = bestProtocol
-	return finishError(bestObservation, start, best)
+	return finishError(bestObservation, measured, best)
+}
+
+// narrowProtocols applies a sniffing hint. A proxy that clearly answered in one
+// family cannot succeed in another, so the remaining probes are skipped. Without
+// a hint every candidate stays, preserving detection for silent servers.
+func narrowProtocols(candidates []model.Protocol, hint model.Protocol) []model.Protocol {
+	if hint == "" {
+		return candidates
+	}
+	narrowed := make([]model.Protocol, 0, 2)
+	for _, candidate := range candidates {
+		if candidate == hint || (hint == model.ProtocolSOCKS4 && candidate == model.ProtocolSOCKS4A) {
+			narrowed = append(narrowed, candidate)
+		}
+	}
+	if len(narrowed) == 0 {
+		return candidates
+	}
+	return narrowed
 }
 
 func autoProtocols(port uint16, remoteDNS bool) []model.Protocol {
@@ -860,13 +921,13 @@ func (c *Checker) waitRate(ctx context.Context) bool {
 	}
 }
 
-func (c *Checker) request(ctx context.Context, p model.Proxy, dest policy.Destination, rules compiledResponseRules) (model.Observation, error) {
-	return c.requestWithRedirects(ctx, p, dest, c.Config.MaxRedirects, rules)
+func (c *Checker) request(ctx context.Context, p model.Proxy, dest policy.Destination, rules compiledResponseRules, dialed *protocol.Dialed) (model.Observation, error) {
+	return c.requestWithRedirects(ctx, p, dest, c.Config.MaxRedirects, rules, dialed)
 }
 
-func (c *Checker) requestWithRedirects(ctx context.Context, p model.Proxy, dest policy.Destination, redirectsLeft int, rules compiledResponseRules) (model.Observation, error) {
+func (c *Checker) requestWithRedirects(ctx context.Context, p model.Proxy, dest policy.Destination, redirectsLeft int, rules compiledResponseRules, dialed *protocol.Dialed) (model.Observation, error) {
 	obs := model.Observation{Protocol: p.Protocol, ResolvedIP: dest.IP.String(), Status: model.StatusFailed, Stage: model.StageConnect, Anonymity: "unavailable"}
-	timed, err := c.Connector.Open(ctx, p, dest)
+	timed, err := c.Connector.OpenDialed(ctx, p, dest, dialed)
 	if err != nil {
 		return obs, err
 	}
@@ -879,15 +940,7 @@ func (c *Checker) requestWithRedirects(ctx context.Context, p model.Proxy, dest 
 	conn := timed.Conn
 	if dest.URL.Scheme == "https" {
 		tlsStart := time.Now()
-		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
-		if c.TLSConfig != nil {
-			tlsConfig = c.TLSConfig.Clone()
-			if tlsConfig.MinVersion == 0 {
-				tlsConfig.MinVersion = tls.VersionTLS12
-			}
-		}
-		tlsConfig.ServerName = dest.Host
-		tc := tls.Client(conn, tlsConfig)
+		tc := tls.Client(conn, c.destinationTLS(dest.Host))
 		if err := tc.HandshakeContext(ctx); err != nil {
 			status := statusFor(err)
 			if status == model.StatusFailed {
@@ -1066,7 +1119,7 @@ func (c *Checker) followRedirect(ctx context.Context, p model.Proxy, u *url.URL,
 		}
 		return prior, &protocol.Error{Stage: model.StageResolve, Status: model.StatusInconclusive, Code: "redirect_dns", Detail: "redirect destination DNS resolution failed", Err: err}
 	}
-	next, err := c.requestWithRedirects(ctx, p, dest, left, rules)
+	next, err := c.requestWithRedirects(ctx, p, dest, left, rules, nil)
 	if err == nil {
 		next.Timings.ConnectMS += prior.Timings.ConnectMS
 		next.Timings.ProxyTLSMS += prior.Timings.ProxyTLSMS

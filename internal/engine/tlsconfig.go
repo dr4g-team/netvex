@@ -29,6 +29,24 @@ func (c *Checker) ConfigureCABundles(destinationPath, proxyPath string) error {
 	return nil
 }
 
+// destinationTLS builds the verified client configuration for one destination.
+// Classical key exchange is opt-in: it saves about a quarter of validation CPU by
+// dropping the hybrid post-quantum share, which is reasonable for test traffic.
+func (c *Checker) destinationTLS(host string) *tls.Config {
+	config := &tls.Config{MinVersion: tls.VersionTLS12}
+	if c.TLSConfig != nil {
+		config = c.TLSConfig.Clone()
+		if config.MinVersion == 0 {
+			config.MinVersion = tls.VersionTLS12
+		}
+	}
+	config.ServerName = host
+	if c.Config.TLSClassicalKEX {
+		config.CurvePreferences = []tls.CurveID{tls.X25519}
+	}
+	return config
+}
+
 func loadRoots(path string) (*x509.CertPool, error) {
 	if path == "" {
 		return nil, nil

@@ -23,6 +23,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -440,26 +441,320 @@ func TestAutoProtocolOrderUsesPortHints(t *testing.T) {
 	}
 }
 
-func TestAutoProbeTimeoutLeavesTimeForOtherCandidates(t *testing.T) {
+func TestAutoStopsAtTheFirstTCPFailure(t *testing.T) {
 	c := baseChecker("http://target.test/")
-	c.Config.RequestTimeout = 180 * time.Millisecond
-	c.Config.AutoProbeTimeout = 100 * time.Millisecond
-	var calls atomic.Int64
+	c.Config.Repeat = 1
+	c.Config.AutoProbeTimeout = 40 * time.Millisecond
+	var dials atomic.Int64
+	c.Connector.ConnectTimeout = 40 * time.Millisecond
 	c.Connector.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
-		calls.Add(1)
+		dials.Add(1)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
+	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolAuto, Host: "proxy.test", Port: 8080})
+	if dials.Load() != 1 {
+		t.Fatalf("dead host dialed %d times", dials.Load())
+	}
+	if result.Status != model.StatusTimeout || result.Observations[0].Stage != model.StageConnect {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestAutoProbeTimeoutLeavesTimeForOtherCandidates(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.Repeat = 1
+	c.Config.RequestTimeout = 240 * time.Millisecond
+	c.Config.AutoProbeTimeout = 40 * time.Millisecond
+	var dials atomic.Int64
+	c.Connector.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		client, server := net.Pipe()
+		go func() {
+			_, _ = io.Copy(io.Discard, server)
+		}()
+		return client, nil
+	}
 	started := time.Now()
-	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolAuto, Host: "proxy", Port: 8080})
-	if elapsed := time.Since(started); elapsed > 350*time.Millisecond {
+	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolAuto, Host: "proxy.test", Port: 8080})
+	if elapsed := time.Since(started); elapsed > 400*time.Millisecond {
 		t.Fatalf("auto detection exceeded bound: %s", elapsed)
 	}
-	if calls.Load() < 3 {
-		t.Fatalf("only %d protocol candidates were attempted", calls.Load())
+	if dials.Load() < 4 {
+		t.Fatalf("only %d connections for a silent server; every candidate must get a turn", dials.Load())
 	}
-	if len(result.Observations) != 1 || result.Observations[0].Code != "attempt_timeout" || result.Status != model.StatusTimeout {
+	if len(result.Observations) != 1 || result.Status != model.StatusTimeout {
 		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestSniffHintSkipsWrongProtocols(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.Repeat = 1
+	var dials atomic.Int64
+	c.Connector.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		first := dials.Add(1) == 1
+		client, server := net.Pipe()
+		go func() {
+			defer server.Close()
+			if first {
+				probe := make([]byte, 8)
+				if _, err := io.ReadFull(server, probe); err != nil {
+					return
+				}
+				_, _ = server.Write([]byte{5, 0})
+				_, _ = io.Copy(io.Discard, server)
+				return
+			}
+			greeting := make([]byte, 3)
+			if _, err := io.ReadFull(server, greeting); err != nil {
+				return
+			}
+			_, _ = server.Write([]byte{5, 0})
+			head := make([]byte, 10)
+			if _, err := io.ReadFull(server, head); err != nil {
+				return
+			}
+			_, _ = server.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+			reader := bufio.NewReader(server)
+			if _, err := http.ReadRequest(reader); err != nil {
+				return
+			}
+			_, _ = io.WriteString(server, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+		}()
+		return client, nil
+	}
+	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolAuto, Host: "proxy.test", Port: 8080})
+	if result.Status != model.StatusOK || result.Protocol != model.ProtocolSOCKS5 {
+		t.Fatalf("result=%+v", result)
+	}
+	if dials.Load() != 2 {
+		t.Fatalf("expected one sniff and one validation, got %d connections", dials.Load())
+	}
+}
+
+func TestNarrowProtocols(t *testing.T) {
+	all := []model.Protocol{model.ProtocolHTTP, model.ProtocolHTTPS, model.ProtocolSOCKS5, model.ProtocolSOCKS4, model.ProtocolSOCKS4A}
+	if got := narrowProtocols(all, ""); len(got) != len(all) {
+		t.Fatalf("no hint changed candidates: %v", got)
+	}
+	if got := narrowProtocols(all, model.ProtocolSOCKS5); len(got) != 1 || got[0] != model.ProtocolSOCKS5 {
+		t.Fatalf("got=%v", got)
+	}
+	if got := narrowProtocols(all, model.ProtocolSOCKS4); len(got) != 2 {
+		t.Fatalf("got=%v", got)
+	}
+	if got := narrowProtocols([]model.Protocol{model.ProtocolHTTP}, model.ProtocolSOCKS5); len(got) != 1 {
+		t.Fatalf("a hint outside the candidates must not empty them: %v", got)
+	}
+}
+
+func TestDeadGatewayNeverOccupiesTargetSlot(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.Repeat = 1
+	c.Config.PerTarget = 1
+	c.Config.Concurrency = 8
+	c.Connector.ConnectTimeout = 80 * time.Millisecond
+	var active, peak atomic.Int64
+	c.Connector.DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		now := active.Add(1)
+		defer active.Add(-1)
+		for {
+			current := peak.Load()
+			if now <= current || peak.CompareAndSwap(current, now) {
+				break
+			}
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	var group sync.WaitGroup
+	for index := range 8 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: uint16(8000 + index)})
+		}()
+	}
+	group.Wait()
+	if peak.Load() != 8 {
+		t.Fatalf("per-target limit throttled dead gateways to %d of 8", peak.Load())
+	}
+}
+
+func TestQueueWaitIsChargedToNeitherLatencyNorTimeout(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.Repeat = 1
+	c.Config.PerTarget = 1
+	c.Config.Concurrency = 2
+	c.Config.RequestTimeout = 300 * time.Millisecond
+	c.Connector.DialContext = pipeDial(func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		_, _ = http.ReadRequest(reader)
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+		_, _ = http.ReadRequest(reader)
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+	})
+	release := c.acquireTarget(context.Background(), "target.test")
+	time.AfterFunc(400*time.Millisecond, release)
+	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	if result.Status != model.StatusOK {
+		t.Fatalf("queue wait consumed the timeout: %+v", result)
+	}
+	timings := result.Observations[0].Timings
+	if timings.QueueMS < 300 || timings.TotalMS > 200 {
+		t.Fatalf("timings=%+v", timings)
+	}
+}
+
+func TestStaleQueuedConnectionIsRedialed(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.Repeat = 1
+	var dials atomic.Int64
+	c.Connector.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		client, server := net.Pipe()
+		go func() {
+			defer server.Close()
+			reader := bufio.NewReader(server)
+			if _, err := http.ReadRequest(reader); err != nil {
+				return
+			}
+			_, _ = io.WriteString(server, "HTTP/1.1 200 Connection Established\r\n\r\n")
+			_, _ = http.ReadRequest(reader)
+			_, _ = io.WriteString(server, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+		}()
+		return client, nil
+	}
+	c.Config.PerTarget = 1
+	release := c.acquireTarget(context.Background(), "target.test")
+	time.AfterFunc(maxQueuedConnAge+50*time.Millisecond, release)
+	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	if result.Status != model.StatusOK || dials.Load() != 2 {
+		t.Fatalf("status=%s dials=%d", result.Status, dials.Load())
+	}
+}
+
+func TestSkipConnectRetryStopsAfterTCPFailure(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.Repeat = 3
+	c.Config.MinSuccessRate = 0.3
+	c.Config.RetryBackoff = 0
+	var dials atomic.Int64
+	c.Connector.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		return nil, syscall.ECONNREFUSED
+	}
+	c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	if dials.Load() != 3 {
+		t.Fatalf("default retries changed: %d", dials.Load())
+	}
+	dials.Store(0)
+	c.Config.SkipConnectRetry = true
+	c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	if dials.Load() != 1 {
+		t.Fatalf("connect failure retried: %d", dials.Load())
+	}
+}
+
+func TestPrescreenRoutesAndRetries(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.PrescreenRetries = 1
+	c.Config.RetryBackoff = 0
+	dials := map[string]*atomic.Int64{"alive.test:80": {}, "flaky.test:80": {}, "dead.test:80": {}}
+	c.Connector.DialContext = func(_ context.Context, _, address string) (net.Conn, error) {
+		attempt := dials[address].Add(1)
+		if address == "dead.test:80" || (address == "flaky.test:80" && attempt == 1) {
+			return nil, syscall.ECONNREFUSED
+		}
+		client, server := net.Pipe()
+		_ = server.Close()
+		return client, nil
+	}
+	input := make(chan model.Proxy, 3)
+	for _, host := range []string{"alive.test", "flaky.test", "dead.test"} {
+		input <- model.Proxy{Protocol: model.ProtocolHTTP, Host: host, Port: 80}
+	}
+	close(input)
+	reachable, rejected := c.Prescreen(context.Background(), input, 2, 4)
+	var alive []string
+	var dead []model.Result
+	for reachable != nil || rejected != nil {
+		select {
+		case proxy, ok := <-reachable:
+			if !ok {
+				reachable = nil
+				continue
+			}
+			alive = append(alive, proxy.Host)
+		case result, ok := <-rejected:
+			if !ok {
+				rejected = nil
+				continue
+			}
+			dead = append(dead, result)
+		}
+	}
+	if len(alive) != 2 || len(dead) != 1 {
+		t.Fatalf("alive=%v dead=%+v", alive, dead)
+	}
+	result := dead[0]
+	if result.Endpoint != "dead.test:80" || result.Status != model.StatusFailed || result.Attempts != 1 || result.Observations[0].Code != "connection_refused" || result.ID == "" || result.Rotation.Classification == "" {
+		t.Fatalf("result=%+v", result)
+	}
+	if dials["dead.test:80"].Load() != 2 {
+		t.Fatalf("dead dials=%d", dials["dead.test:80"].Load())
+	}
+}
+
+func TestPrescreenStopsOnCancellation(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	ctx, cancel := context.WithCancel(context.Background())
+	input := make(chan model.Proxy)
+	reachable, rejected := c.Prescreen(ctx, input, 3, 1)
+	cancel()
+	deadline := time.After(2 * time.Second)
+	for reachable != nil || rejected != nil {
+		select {
+		case _, ok := <-reachable:
+			if !ok {
+				reachable = nil
+			}
+		case _, ok := <-rejected:
+			if !ok {
+				rejected = nil
+			}
+		case <-deadline:
+			t.Fatal("prescreen did not stop")
+		}
+	}
+}
+
+func TestMergeForwardsBothStreams(t *testing.T) {
+	first, second := make(chan model.Result, 2), make(chan model.Result, 2)
+	first <- model.Result{ID: "a"}
+	second <- model.Result{ID: "b"}
+	second <- model.Result{ID: "c"}
+	close(first)
+	close(second)
+	count := 0
+	for range Merge(first, second, 1) {
+		count++
+	}
+	if count != 3 {
+		t.Fatalf("count=%d", count)
+	}
+}
+
+func TestClassicalKeyExchangeIsOptIn(t *testing.T) {
+	c := baseChecker("https://target.test/")
+	if preferences := c.destinationTLS("target.test").CurvePreferences; preferences != nil {
+		t.Fatalf("default curves changed: %v", preferences)
+	}
+	c.Config.TLSClassicalKEX = true
+	config := c.destinationTLS("target.test")
+	if len(config.CurvePreferences) != 1 || config.CurvePreferences[0] != tls.X25519 || config.ServerName != "target.test" || config.MinVersion != tls.VersionTLS12 {
+		t.Fatalf("config=%+v", config)
 	}
 }
 

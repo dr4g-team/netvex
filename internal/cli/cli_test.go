@@ -164,7 +164,7 @@ func TestCheckEndToEndThroughControlledConnectProxy(t *testing.T) {
 		<-requestDone
 	}()
 
-	code, stdout, stderr := run([]string{"check", "--profile", "fast", "--protocol", "http", "--format", "jsonl", "--allow-private-targets", "--allow-private-proxies", "--target", target.URL}, listener.Addr().String()+"\n")
+	code, stdout, stderr := run([]string{"check", "--repeat", "1", "--protocol", "http", "--format", "jsonl", "--allow-private-targets", "--allow-private-proxies", "--target", target.URL}, listener.Addr().String()+"\n")
 	if code != ExitOK {
 		t.Fatalf("code=%d stderr=%q", code, stderr)
 	}

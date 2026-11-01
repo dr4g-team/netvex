@@ -60,6 +60,13 @@ type Config struct {
 	AllowRemoteDNS    bool                     `json:"allow_remote_dns"`
 	AllowPrivateProxy bool                     `json:"allow_private_proxies"`
 	RetryPermanent    bool                     `json:"retry_permanent_failures"`
+	SkipConnectRetry  bool                     `json:"skip_connect_retry"`
+	TLSClassicalKEX   bool                     `json:"tls_classical_kex"`
+	Prescreen         bool                     `json:"prescreen"`
+	PrescreenWorkers  int                      `json:"prescreen_concurrency"`
+	PrescreenRetries  int                      `json:"prescreen_retries"`
+	PrescreenTimeout  time.Duration            `json:"-"`
+	PrescreenRaw      string                   `json:"prescreen_timeout"`
 	StopOnSuccess     bool                     `json:"stop_on_success"`
 	RetryBackoff      time.Duration            `json:"-"`
 	RetryBackoffRaw   string                   `json:"retry_backoff"`
@@ -122,6 +129,7 @@ func Defaults() Config {
 		ProxyDNSCacheRaw: "0s",
 		RetryBackoff:     100 * time.Millisecond, RetryBackoffRaw: "100ms",
 		RotationRaw: "0s", Preflight: "off",
+		PrescreenWorkers: 4096, PrescreenRetries: 1, PrescreenRaw: "0s",
 		DataDir: defaultDataDir(), ProgressInterval: 500 * time.Millisecond, ProgressRaw: "500ms",
 	}
 }
@@ -182,6 +190,8 @@ func applyEnv(c *Config) error {
 		{"NETVEX_TARGET_QUORUM", &c.TargetQuorum},
 		{"NETVEX_ROTATION_SAMPLES", &c.RotationSamples},
 		{"NETVEX_MAX_INPUT_ENTRIES", &c.MaxInputEntries},
+		{"NETVEX_PRESCREEN_CONCURRENCY", &c.PrescreenWorkers},
+		{"NETVEX_PRESCREEN_RETRIES", &c.PrescreenRetries},
 	} {
 		if err := envInt(item.name, item.dst); err != nil {
 			return err
@@ -220,6 +230,9 @@ func applyEnv(c *Config) error {
 		{"NETVEX_ALLOW_REMOTE_DNS", &c.AllowRemoteDNS},
 		{"NETVEX_ALLOW_PRIVATE_PROXIES", &c.AllowPrivateProxy},
 		{"NETVEX_RETRY_PERMANENT_FAILURES", &c.RetryPermanent},
+		{"NETVEX_SKIP_CONNECT_RETRY", &c.SkipConnectRetry},
+		{"NETVEX_TLS_CLASSICAL_KEX", &c.TLSClassicalKEX},
+		{"NETVEX_PRESCREEN", &c.Prescreen},
 		{"NETVEX_STOP_ON_SUCCESS", &c.StopOnSuccess},
 		{"NETVEX_SAVE", &c.Save},
 		{"NETVEX_TARGET_MATRIX", &c.TargetMatrix},
@@ -278,6 +291,9 @@ func applyEnv(c *Config) error {
 	}
 	if v := os.Getenv("NETVEX_PROXY_DNS_CACHE_TTL"); v != "" {
 		c.ProxyDNSCacheRaw = v
+	}
+	if v := os.Getenv("NETVEX_PRESCREEN_TIMEOUT"); v != "" {
+		c.PrescreenRaw = v
 	}
 	if v := os.Getenv("NETVEX_RETRY_BACKOFF"); v != "" {
 		c.RetryBackoffRaw = v
@@ -380,6 +396,9 @@ func (c *Config) ParseDurations() error {
 	if c.RotationInterval, err = time.ParseDuration(c.RotationRaw); err != nil {
 		return fmt.Errorf("invalid rotation_interval: %w", err)
 	}
+	if c.PrescreenTimeout, err = time.ParseDuration(c.PrescreenRaw); err != nil {
+		return fmt.Errorf("invalid prescreen_timeout: %w", err)
+	}
 	return nil
 }
 
@@ -422,6 +441,15 @@ func (c Config) Validate() error {
 	}
 	if c.RotationInterval < 0 || c.RotationInterval > time.Hour {
 		return errors.New("rotation_interval must be between 0 and 1h")
+	}
+	if c.PrescreenWorkers < 1 || c.PrescreenWorkers > 65536 {
+		return errors.New("prescreen_concurrency must be between 1 and 65536")
+	}
+	if c.PrescreenRetries < 0 || c.PrescreenRetries > 3 {
+		return errors.New("prescreen_retries must be between 0 and 3")
+	}
+	if c.PrescreenTimeout != 0 && (c.PrescreenTimeout < 100*time.Millisecond || c.PrescreenTimeout > 2*time.Minute) {
+		return errors.New("prescreen_timeout must be 0 (use connect_timeout) or between 100ms and 2m")
 	}
 	if c.RotationSamples != 0 && (c.RotationSamples < 2 || c.RotationSamples > 50) {
 		return errors.New("rotation_samples must be 0 (disabled) or between 2 and 50")
@@ -629,5 +657,6 @@ func (c Config) MarshalJSON() ([]byte, error) {
 	a.ProxyDNSCacheRaw = c.ProxyDNSCacheTTL.String()
 	a.RetryBackoffRaw = c.RetryBackoff.String()
 	a.RotationRaw = c.RotationInterval.String()
+	a.PrescreenRaw = c.PrescreenTimeout.String()
 	return json.MarshalIndent(a, "", "  ")
 }

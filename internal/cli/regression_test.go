@@ -250,3 +250,39 @@ func TestInterruptEndsRunWhileStandardInputStaysOpen(t *testing.T) {
 		t.Fatalf("checkpoint=%q err=%v", payload, err)
 	}
 }
+
+func TestPrescreenRejectsDeadGatewaysAndValidatesTheRest(t *testing.T) {
+	proxy, target := connectProxy(t), echoTarget(t)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Skip(err)
+	}
+	dead := listener.Addr().String()
+	_ = listener.Close()
+	code, out, diag := run([]string{"check", "--prescreen", "--prescreen-retries", "0", "--repeat", "1", "--format", "jsonl", "--allow-private-targets", "--allow-private-proxies", "--target", target}, proxy+"\n"+dead+"\n")
+	if code != ExitOK {
+		t.Fatalf("code=%d diag=%q", code, diag)
+	}
+	statuses := map[string]model.Status{}
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		var result model.Result
+		if err := json.Unmarshal([]byte(line), &result); err != nil {
+			t.Fatal(err)
+		}
+		statuses[result.Endpoint] = result.Status
+	}
+	if statuses[proxy] != model.StatusOK || statuses[dead] != model.StatusFailed || len(statuses) != 2 {
+		t.Fatalf("statuses=%v", statuses)
+	}
+}
+
+func TestPrescreenFlagBounds(t *testing.T) {
+	for _, args := range [][]string{{"--prescreen-concurrency", "70000"}, {"--prescreen-retries", "9"}, {"--prescreen-timeout", "1ms"}} {
+		if code, _, _ := run(append([]string{"check"}, args...), "proxy.test:80\n"); code != ExitUsage {
+			t.Fatalf("%v code=%d", args, code)
+		}
+	}
+	if workers := boundedPrescreenWorkers(1<<40, 128); workers < 1 {
+		t.Fatalf("workers=%d", workers)
+	}
+}
