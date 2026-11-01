@@ -4,9 +4,13 @@ VERSION ?= $(shell tr -d '\n' < VERSION)
 COMMIT ?= $(shell git rev-parse --short=12 HEAD 2>/dev/null || printf unknown)
 BUILD_DATE ?= $(shell git show -s --format=%cI HEAD 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%SZ)
 MODULE := github.com/drag-team/netvex
+GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.9.0
+STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
+FUZZTIME ?= 30s
+COVERAGE_MIN ?= 70
 LDFLAGS := -s -w -X $(MODULE)/internal/buildinfo.Version=$(VERSION) -X $(MODULE)/internal/buildinfo.Commit=$(COMMIT) -X $(MODULE)/internal/buildinfo.Date=$(BUILD_DATE)
 
-.PHONY: all build check clean cross-check fmt fmt-check install race release-check reproducibility-check test uninstall version vet
+.PHONY: all build check clean cover cross-check fmt fmt-check fuzz install lint race release-check reproducibility-check test uninstall verify version vet vuln
 
 all: check build
 
@@ -15,6 +19,31 @@ build:
 	CGO_ENABLED=0 go build -mod=readonly -trimpath -buildvcs=false -ldflags '$(LDFLAGS)' -o $(BINARY) ./cmd/netvex
 
 check: fmt-check vet test race
+
+verify: check lint vuln cover
+
+lint:
+	go run $(STATICCHECK) ./...
+
+vuln:
+	go run $(GOVULNCHECK) ./...
+
+cover:
+	@set -eu; tmp="$$(mktemp)"; trap 'rm -f "$$tmp"' EXIT; \
+	go test -coverprofile="$$tmp" ./... >/dev/null; \
+	total="$$(go tool cover -func="$$tmp" | awk '/^total:/ {gsub("%","",$$3); print $$3}')"; \
+	printf 'total coverage %s%% (minimum %s%%)\n' "$$total" '$(COVERAGE_MIN)'; \
+	awk -v t="$$total" -v m='$(COVERAGE_MIN)' 'BEGIN {exit !(t+0 >= m+0)}'
+
+fuzz:
+	@set -eu; \
+	for file in $$(grep -rlE '^func Fuzz' --include='*_test.go' internal); do \
+		package="./$$(dirname "$$file")"; \
+		for name in $$(grep -hoE '^func Fuzz[A-Za-z0-9]+' "$$file" | cut -d' ' -f2); do \
+			printf 'fuzzing %s %s\n' "$$package" "$$name"; \
+			go test "$$package" -run '^$$' -fuzz "^$$name$$" -fuzztime='$(FUZZTIME)'; \
+		done; \
+	done
 
 cross-check:
 	@set -eu; tmp="$$(mktemp -d)"; trap 'rm -rf "$$tmp"' EXIT; \
@@ -64,7 +93,7 @@ release-check:
 	@test "$$(git rev-parse HEAD)" = "$$(git rev-list -n 1 'v$(VERSION)')" || { printf '%s\n' 'release tag does not point to HEAD' >&2; exit 1; }
 	@grep -Fq '## [$(VERSION)]' CHANGELOG.md || { printf '%s\n' 'CHANGELOG.md has no section for $(VERSION)' >&2; exit 1; }
 	@test -z "$$(git status --porcelain)" || { printf '%s\n' 'working tree is not clean' >&2; exit 1; }
-	@$(MAKE) check
+	@$(MAKE) verify
 
 uninstall:
 	rm -f $(DESTDIR)$(PREFIX)/bin/netvex

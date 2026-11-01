@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        go: ["1.24.x", stable]
+        go: ["1.26.x", stable]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -33,17 +33,35 @@ jobs:
       - name: Verify formatting
         run: make fmt-check
       - name: Run tests
-        run: make test
+        run: scripts/go-test-annotated.sh
       - name: Run static analysis
         run: make vet
       - name: Build static binary
         run: make build
       - name: Verify reproducible binary
-        if: matrix.go == '1.24.x'
+        if: matrix.go == 'stable'
         run: make reproducibility-check
       - name: Run race detector
         if: matrix.go == 'stable'
         run: make race
+  security:
+    name: Static analysis and vulnerabilities
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+          cache: false
+      - name: Run staticcheck
+        run: make lint
+      - name: Run govulncheck
+        run: make vuln
+      - name: Enforce coverage floor
+        run: make cover
   native-platforms:
     name: Native ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
@@ -64,10 +82,11 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.24.x"
+          go-version: stable
           cache: false
       - name: Run tests
-        run: go test ./...
+        shell: bash
+        run: scripts/go-test-annotated.sh
       - name: Run static analysis
         run: go vet ./...
       - name: Build executable
@@ -121,7 +140,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.24.x"
+          go-version: stable
           cache: false
       - name: Compile application and tests
         env:

@@ -15,7 +15,8 @@ request.
 
 ## Development setup
 
-Requirements are Go 1.24 or newer, GNU Make, and Git.
+Requirements are Go 1.26 or newer, GNU Make, and Git. The `toolchain` line in
+`go.mod` selects the exact compiler for reproducible builds.
 
 ```sh
 git clone https://github.com/drag-team/netvex.git
