@@ -4,8 +4,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/drag-team/netvex/internal/config"
 	historypkg "github.com/drag-team/netvex/internal/history"
@@ -13,6 +15,20 @@ import (
 	"github.com/drag-team/netvex/internal/output"
 	"github.com/drag-team/netvex/internal/store"
 )
+
+// parseAge adds days to Go durations, the natural unit for retention.
+func parseAge(value string) (time.Duration, error) {
+	age, err := time.ParseDuration(value)
+	if days, found := strings.CutSuffix(value, "d"); found {
+		var count int
+		count, err = strconv.Atoi(days)
+		age = time.Duration(count) * 24 * time.Hour
+	}
+	if err != nil || age <= 0 {
+		return 0, fmt.Errorf("older-than must be a positive age such as 30d or 12h, not %q", value)
+	}
+	return age, nil
+}
 
 func (c CLI) runs(args []string) int {
 	action := "list"
@@ -24,6 +40,7 @@ func (c CLI) runs(args []string) int {
 	limit := fs.Int("limit", 50, "maximum runs to list")
 	jsonOut := fs.Bool("json", false, "emit a JSON array")
 	keep := fs.Int("keep", 20, "newest runs to retain when pruning")
+	olderThan := fs.String("older-than", "", "prune only runs older than this age, such as 30d or 12h")
 	execute := fs.Bool("execute", false, "apply prune; without this flag only show the plan")
 	if ok, code := c.parseFlags(fs, buf, args); !ok {
 		return code
@@ -33,7 +50,16 @@ func (c CLI) runs(args []string) int {
 			fmt.Fprintln(c.Stderr, "keep must be between 0 and 1000000")
 			return ExitUsage
 		}
-		ids, err := store.PruneRuns(*data, *keep, *execute)
+		var cutoff time.Time
+		if *olderThan != "" {
+			age, err := parseAge(*olderThan)
+			if err != nil {
+				fmt.Fprintln(c.Stderr, err)
+				return ExitUsage
+			}
+			cutoff = time.Now().Add(-age)
+		}
+		ids, err := store.PruneRuns(*data, *keep, cutoff, *execute)
 		if err != nil {
 			fmt.Fprintln(c.Stderr, err)
 			return ExitOperational

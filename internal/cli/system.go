@@ -163,7 +163,7 @@ func (c CLI) completion(args []string) int {
 		fmt.Fprintln(c.Stderr, "usage: netvex completion bash|zsh|fish")
 		return ExitUsage
 	}
-	commands := "check inspect import results runs export stats history pool shard merge diff explore config doctor bench capabilities schema completion version help"
+	commands := commandNames
 	fs, _ := c.newFlagSet("completion-check")
 	var options checkOptions
 	c.addCheckFlags(fs, &options)
@@ -179,6 +179,10 @@ func (c CLI) completion(args []string) int {
     COMPREPLY=( $(compgen -W %q -- "$cur") )
   elif [[ ${COMP_WORDS[1]} == check ]]; then
     COMPREPLY=( $(compgen -W %q -- "$cur") )
+  elif [[ $cur == -* ]]; then
+    COMPREPLY=( $(compgen -W "$(netvex "${COMP_WORDS[1]}" --help 2>&1 | sed -n 's/^  -\([a-z0-9-]*\).*/--\1/p')" -- "$cur") )
+  else
+    COMPREPLY=( $(compgen -f -- "$cur") )
   fi
 }
 complete -F _netvex netvex
@@ -190,8 +194,10 @@ _netvex() {
   commands=(%s)
   if (( CURRENT == 2 )); then
     _describe 'command' commands
-  else
+  elif [[ ${words[2]} == check ]]; then
     _arguments '*:option:(%s)'
+  else
+    _arguments "*:option:($(netvex ${words[2]} --help 2>&1 | sed -n 's/^  -\([a-z0-9-]*\).*/--\1/p'))"
   fi
 }
 _netvex
@@ -203,6 +209,11 @@ _netvex
 		for _, option := range strings.Fields(checkFlags) {
 			if strings.HasPrefix(option, "--") {
 				fmt.Fprintf(c.Stdout, "complete -c netvex -f -n '__fish_seen_subcommand_from check' -l %s\n", strings.TrimPrefix(option, "--"))
+			}
+		}
+		for _, command := range strings.Fields(commands) {
+			if command != "check" {
+				fmt.Fprintf(c.Stdout, "complete -c netvex -f -n '__fish_seen_subcommand_from %s' -a \"(netvex %s --help 2>&1 | sed -n 's/^  -\\([a-z0-9-]*\\).*/--\\1/p')\"\n", command, command)
 			}
 		}
 	default:

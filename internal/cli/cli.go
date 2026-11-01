@@ -30,6 +30,9 @@ type CLI struct {
 	// ErrorTerminal enables the live progress line, which writes to stderr so that
 	// redirecting stdout to a file still shows progress.
 	ErrorTerminal bool
+	// InputTerminal reports that stdin is a person, not a pipe. Reading proxies from
+	// it would look like a hang, so commands ask for a file instead.
+	InputTerminal bool
 }
 
 func (c CLI) Run(args []string) int {
@@ -81,9 +84,47 @@ func (c CLI) Run(args []string) int {
 	case "schema":
 		return c.schemaCmd(args[1:])
 	default:
-		fmt.Fprintf(c.Stderr, "netvex: unknown command %q; run 'netvex help'\n", args[0])
+		if suggestion := closestCommand(args[0]); suggestion != "" {
+			fmt.Fprintf(c.Stderr, "netvex: unknown command %q; did you mean %q?\n", args[0], suggestion)
+		} else {
+			fmt.Fprintf(c.Stderr, "netvex: unknown command %q; run 'netvex help'\n", args[0])
+		}
 		return ExitUsage
 	}
+}
+
+const commandNames = "check inspect import results runs export stats history pool shard merge diff explore config doctor bench capabilities schema completion version help"
+
+// closestCommand suggests a command within two edits, so typos get an answer
+// instead of a pointer to the help text.
+func closestCommand(input string) string {
+	best, bestDistance := "", 3
+	for _, name := range strings.Fields(commandNames) {
+		if distance := editDistance(strings.ToLower(input), name); distance < bestDistance {
+			best, bestDistance = name, distance
+		}
+	}
+	return best
+}
+
+func editDistance(left, right string) int {
+	previous := make([]int, len(right)+1)
+	for index := range previous {
+		previous[index] = index
+	}
+	for row := 1; row <= len(left); row++ {
+		current := make([]int, len(right)+1)
+		current[0] = row
+		for column := 1; column <= len(right); column++ {
+			cost := 1
+			if left[row-1] == right[column-1] {
+				cost = 0
+			}
+			current[column] = min(previous[column]+1, current[column-1]+1, previous[column-1]+cost)
+		}
+		previous = current
+	}
+	return previous[len(right)]
 }
 
 func (c CLI) schemaCmd(args []string) int {

@@ -363,7 +363,9 @@ func ListRuns(dataDir string, limit int) ([]model.RunSummary, error) {
 	return runs, nil
 }
 
-func PruneRuns(dataDir string, keep int, execute bool) ([]string, error) {
+// PruneRuns removes runs beyond the newest keep. A non-zero cutoff also spares
+// anything newer, so both conditions must hold before a run is deleted.
+func PruneRuns(dataDir string, keep int, cutoff time.Time, execute bool) ([]string, error) {
 	if keep < 0 {
 		return nil, errors.New("keep must not be negative")
 	}
@@ -385,7 +387,12 @@ func PruneRuns(dataDir string, keep int, execute bool) ([]string, error) {
 	if keep >= len(names) {
 		return []string{}, nil
 	}
-	candidates := append([]string(nil), names[keep:]...)
+	candidates := make([]string, 0, len(names)-keep)
+	for _, id := range names[keep:] {
+		if cutoff.IsZero() || runStartedBefore(id, cutoff) {
+			candidates = append(candidates, id)
+		}
+	}
 	if !execute {
 		return candidates, nil
 	}
@@ -400,6 +407,14 @@ func PruneRuns(dataDir string, keep int, execute bool) ([]string, error) {
 		return nil, err
 	}
 	return candidates, nil
+}
+
+// runStartedBefore reads the timestamp that begins every run ID. An ID it cannot
+// parse was not written by this program, so it is kept rather than guessed at.
+func runStartedBefore(id string, cutoff time.Time) bool {
+	stamp, _, _ := strings.Cut(id, "-")
+	started, err := time.Parse("20060102T150405.000000000Z", stamp)
+	return err == nil && started.Before(cutoff)
 }
 
 func StreamCopy(dst io.Writer, path string) error {

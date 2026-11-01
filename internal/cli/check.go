@@ -138,6 +138,10 @@ func (c CLI) newCheckSession(args []string, detailed bool) (*checkSession, int) 
 		fmt.Fprintln(c.Stderr, err)
 		return nil, ExitUsage
 	}
+	if len(s.files) == 0 && c.InputTerminal {
+		fmt.Fprintln(c.Stderr, "no proxies given: pass a file, or pipe a list with `netvex check -`")
+		return nil, ExitUsage
+	}
 	if s.options.qualityPolicy != "" {
 		loaded, err := qualitypkg.Load(s.options.qualityPolicy)
 		if err != nil {

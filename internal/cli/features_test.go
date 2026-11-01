@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -467,5 +468,73 @@ func TestCheckpointRejectsChangedCertificatePins(t *testing.T) {
 	second := checkpointFingerprint(config.Config{Targets: []string{"https://a.test/"}, PinSHA256: []string{strings.Repeat("a", 64)}}, model.ProtocolHTTP)
 	if first == second {
 		t.Fatal("certificate pins must be part of the verdict fingerprint")
+	}
+}
+
+func TestUnknownCommandSuggestsTheClosestOne(t *testing.T) {
+	code, _, diag := run([]string{"chek"}, "")
+	if code != ExitUsage || !strings.Contains(diag, `did you mean "check"`) {
+		t.Fatalf("code=%d diag=%q", code, diag)
+	}
+	if code, _, diag := run([]string{"INSPECT"}, ""); code != ExitUsage || !strings.Contains(diag, `"inspect"`) {
+		t.Fatalf("code=%d diag=%q", code, diag)
+	}
+	if code, _, diag := run([]string{"completely-different"}, ""); code != ExitUsage || strings.Contains(diag, "did you mean") {
+		t.Fatalf("code=%d diag=%q", code, diag)
+	}
+}
+
+func TestCheckExplainsMissingInputOnTerminals(t *testing.T) {
+	var out, diag strings.Builder
+	cli := CLI{Stdout: &out, Stderr: &diag, Stdin: strings.NewReader(""), InputTerminal: true}
+	if code := cli.Run([]string{"check", "--target", "http://127.0.0.1:9/"}); code != ExitUsage || !strings.Contains(diag.String(), "no proxies given") {
+		t.Fatalf("code=%d diag=%q", code, diag.String())
+	}
+	diag.Reset()
+	if code := cli.Run([]string{"check", "--target", "http://127.0.0.1:9/", "-"}); code == ExitUsage {
+		t.Fatalf("explicit stdin refused: %q", diag.String())
+	}
+}
+
+func TestRunsPruneOlderThan(t *testing.T) {
+	proxy, target := connectProxy(t), echoTarget(t)
+	dir := t.TempDir()
+	if code, _, diag := run(checkArgs(target, "--save", "--data-dir", dir), proxy+"\n"); code != ExitOK {
+		t.Fatalf("code=%d diag=%q", code, diag)
+	}
+	code, _, diag := run([]string{"runs", "prune", "--data-dir", dir, "--keep", "0", "--older-than", "30d", "--execute"}, "")
+	if code != ExitOK || !strings.Contains(diag, "removed=0") {
+		t.Fatalf("code=%d diag=%q", code, diag)
+	}
+	if code, _, diag := run([]string{"runs", "prune", "--data-dir", dir, "--keep", "0", "--older-than", "soon"}, ""); code != ExitUsage || !strings.Contains(diag, "older-than") {
+		t.Fatalf("code=%d diag=%q", code, diag)
+	}
+	for value, want := range map[string]time.Duration{"30d": 720 * time.Hour, "12h": 12 * time.Hour} {
+		if age, err := parseAge(value); err != nil || age != want {
+			t.Fatalf("%s: %v %v", value, age, err)
+		}
+	}
+	for _, value := range []string{"0d", "-1h", "d", ""} {
+		if _, err := parseAge(value); err == nil {
+			t.Fatalf("%q accepted", value)
+		}
+	}
+}
+
+func TestCompletionsCoverEveryCommand(t *testing.T) {
+	code, bash, _ := run([]string{"completion", "bash"}, "")
+	if code != ExitOK || !strings.Contains(bash, "--help 2>&1") || !strings.Contains(bash, "diff") {
+		t.Fatalf("code=%d bash=%q", code, bash)
+	}
+	if _, err := exec.LookPath("bash"); err == nil {
+		check := exec.Command("bash", "-n")
+		check.Stdin = strings.NewReader(bash)
+		if output, err := check.CombinedOutput(); err != nil {
+			t.Fatalf("generated bash does not parse: %v %s", err, output)
+		}
+	}
+	code, fish, _ := run([]string{"completion", "fish"}, "")
+	if code != ExitOK || !strings.Contains(fish, "__fish_seen_subcommand_from results") {
+		t.Fatalf("code=%d fish=%q", code, fish)
 	}
 }

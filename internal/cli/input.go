@@ -49,6 +49,7 @@ func (c CLI) inspect(args []string) int {
 		proxy = strings.TrimSpace(line)
 	}
 	c.Stdin = strings.NewReader(proxy + "\n")
+	c.InputTerminal = false
 	return c.check(append([]string{"--format", "jsonl", "--repeat", "3"}, flags...), true)
 }
 

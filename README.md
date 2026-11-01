@@ -383,6 +383,7 @@ Environment configuration covers every persistent engine setting:
 | Response qualification | `NETVEX_MIN_RESPONSE_BYTES`, `NETVEX_MIN_THROUGHPUT_KBPS`, `NETVEX_REQUIRE_TEXT`, `NETVEX_REJECT_TEXT`, `NETVEX_EXPECT_JSON`, `NETVEX_EXPECTED_BODY_SHA256`, `NETVEX_ANONYMITY_BASELINE_IP`, `NETVEX_EXPECT_COUNTRY`, `NETVEX_PROBE_UDP` |
 | TLS trust | `NETVEX_CA_BUNDLE`, `NETVEX_PROXY_CA_BUNDLE`, `NETVEX_PIN_SHA256` |
 | Resource limits | `NETVEX_MAX_INPUT_BYTES`, `NETVEX_MAX_INPUT_ENTRIES`, `NETVEX_MAX_RESPONSE_BYTES`, `NETVEX_INTELLIGENCE_BODY_BYTES` |
+| Credentials | `NETVEX_NO_CLEARTEXT_CREDENTIALS` |
 | Persistence and metadata | `NETVEX_DATA_DIR`, `NETVEX_SAVE`, `NETVEX_SAVE_GZIP`, `NETVEX_METADATA_FILE` |
 
 List values are comma-separated. Boolean values use Go boolean syntax such as
@@ -425,8 +426,11 @@ the resulting file as a secret.
 
 HTTP proxies may use Basic or Digest (MD5 or SHA-256, RFC 7616) over CONNECT. Basic
 is sent first, as is usual for proxies, so a Digest-only proxy that does not use TLS
-still sees the Basic attempt. Digest is not available for forward mode, which
-`--allow-remote-dns` uses for plain HTTP targets.
+still sees the Basic attempt. `--no-cleartext-credentials` prevents that: it asks the
+proxy what it accepts before sending anything, uses Digest or TLS when available, and
+otherwise refuses with `cleartext_credentials_refused`, including for SOCKS, whose
+credentials are always readable on the wire. Digest is not available for forward
+mode, which `--allow-remote-dns` uses for plain HTTP targets.
 
 `--keep-partial` also publishes `--save`, `--summary-output`, and the other reports
 after an interruption, marked `interrupted` in the summary. Without it an interrupted
@@ -454,7 +458,8 @@ of dead proxies. Failures before the next probe keep their classification.
 
 `--save-status ok,unreliable` keeps only those results on disk while summaries
 still count everything. `--save-gzip` compresses saved runs, which matters on large
-lists because each result takes about 950 bytes; every command reads both formats. `netvex diff [BASE [CURRENT]]` compares two saved runs,
+lists because each result takes about 950 bytes; every command reads both formats. `netvex runs prune --keep 20 --older-than 30d --execute` removes old runs only when
+both conditions hold. `netvex diff [BASE [CURRENT]]` compares two saved runs,
 by default the two newest, and reports proxies that died, revived, appeared,
 disappeared, or changed median latency beyond `--latency-change` percent.
 

@@ -68,14 +68,14 @@ func TestListRunsNewestFirst(t *testing.T) {
 	if err != nil || len(empty) != 0 {
 		t.Fatalf("empty list: %+v %v", empty, err)
 	}
-	plan, err := PruneRuns(dir, 1, false)
+	plan, err := PruneRuns(dir, 1, time.Time{}, false)
 	if err != nil || len(plan) != 1 {
 		t.Fatalf("prune plan=%v err=%v", plan, err)
 	}
 	if runs, _ := ListRuns(dir, 10); len(runs) != 2 {
 		t.Fatal("dry-run removed data")
 	}
-	removed, err := PruneRuns(dir, 1, true)
+	removed, err := PruneRuns(dir, 1, time.Time{}, true)
 	if err != nil || len(removed) != 1 {
 		t.Fatalf("removed=%v err=%v", removed, err)
 	}
@@ -154,7 +154,7 @@ func TestCompressedRunsBehaveLikePlainRuns(t *testing.T) {
 	if runs, err := ListRuns(dir, 10); err != nil || len(runs) != 2 {
 		t.Fatalf("runs=%d err=%v", len(runs), err)
 	}
-	if _, err := PruneRuns(dir, 0, true); err != nil {
+	if _, err := PruneRuns(dir, 0, time.Time{}, true); err != nil {
 		t.Fatal(err)
 	}
 	if entries, err := os.ReadDir(filepath.Join(dir, "runs")); err != nil || len(entries) != 0 {
@@ -187,5 +187,29 @@ func TestOversizedResultIsRefusedWithoutStoppingTheWriter(t *testing.T) {
 	}
 	if err := writer.Write(benchmarkResult()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPruneRequiresBothCountAndAge(t *testing.T) {
+	dir := t.TempDir()
+	runs := filepath.Join(dir, "runs")
+	if err := os.MkdirAll(runs, 0700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	old := now.Add(-48*time.Hour).Format("20060102T150405.000000000Z") + "-aaaa"
+	recent := now.Add(-time.Hour).Format("20060102T150405.000000000Z") + "-bbbb"
+	newest := now.Format("20060102T150405.000000000Z") + "-cccc"
+	for _, id := range []string{old, recent, newest, "manual-name"} {
+		if err := os.WriteFile(filepath.Join(runs, id+".summary.json"), []byte("{}"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan, err := PruneRuns(dir, 1, now.Add(-24*time.Hour), false)
+	if err != nil || len(plan) != 1 || plan[0] != old {
+		t.Fatalf("plan=%v err=%v", plan, err)
+	}
+	if plan, err := PruneRuns(dir, 5, now, false); err != nil || len(plan) != 0 {
+		t.Fatalf("keep ignored: %v err=%v", plan, err)
 	}
 }

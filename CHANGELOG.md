@@ -11,12 +11,17 @@ All notable changes to NetVex are documented in this file. The project uses
 - `--save-gzip` stores runs compressed. Every command reads both formats.
 - HTTP Digest proxy authentication with MD5 and SHA-256 over CONNECT.
 - `--pin-sha256` detects TLS interception by a CA this host trusts.
+- `--no-cleartext-credentials` never sends a password without encryption.
+- `runs prune --older-than`, suggestions for mistyped commands, and shell completion
+  for every command.
 
 ### Changed
 
 - **Breaking:** redirects from HTTPS to plain HTTP are refused with
   `redirect_downgrade`. `--allow-redirect-downgrade` restores them.
 - `check --help` groups options by task.
+- `check` explains missing input on a terminal instead of waiting for it.
+- Pooled request buffers nearly halve the memory of a validation.
 - `--keep-partial` now also publishes saved runs and reports after an interruption,
   marked `interrupted` in the summary. Result schema version 7.
 - `inspect` no longer writes the proxy, including credentials, to a temporary file,
@@ -34,6 +39,7 @@ All notable changes to NetVex are documented in this file. The project uses
 
 - `--save-status` was refused when saving came from the configuration or
   `NETVEX_SAVE` rather than the `--save` flag.
+- Time to first byte ignored earlier hops of a redirect.
 - `--rate` lost capacity on Windows, where timer overshoot exceeded the catch-up
   window: 5,000/s delivered 3,439/s.
 - Commit history on `main` after `427e7fe` was rewritten to remove co-author
