@@ -5,6 +5,9 @@
 *.part
 *.out
 *.prof
+*.exe
+*.checkpoint.jsonl*
+*.prom
 coverage*.txt
 coverage*.xml
 netvex-results*.jsonl

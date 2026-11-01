@@ -18,6 +18,8 @@ All notable changes to NetVex are documented in this file. The project follows
   preventing ordinary CI from accidentally entering release or fuzzing paths.
 - The first successful consolidated run performs the requested one-time cleanup
   of superseded Actions runs; later runs retain normal audit history.
+- Ignore root Windows binaries (`*.exe`), checkpoints (`*.checkpoint.jsonl*`),
+  and Prometheus metrics snapshots in `.gitignore`.
 
 ## [1.0.0] - 2026-11-01
 
