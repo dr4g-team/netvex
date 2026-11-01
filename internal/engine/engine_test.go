@@ -1,7 +1,11 @@
 package engine
 
 import (
+	"bufio"
 	"context"
+	"io"
+	"net"
+	"net/http"
 	"testing"
 
 	"github.com/drag-team/netvex/internal/model"
@@ -43,4 +47,25 @@ func workerName(n int) string {
 		return "workers_16"
 	}
 	return "workers_128"
+}
+
+// BenchmarkCheckLiveProxy measures one complete validation over an in-memory
+// proxy, so allocation changes in the request path show up without network noise.
+func BenchmarkCheckLiveProxy(b *testing.B) {
+	checker := baseChecker("http://target.test/")
+	checker.Config.Repeat = 1
+	checker.Connector.DialContext = pipeDial(func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		_, _ = http.ReadRequest(reader)
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+		_, _ = http.ReadRequest(reader)
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 46\r\n\r\n{\"origin\":\"203.0.113.9\",\"headers\":{\"Host\":\"x\"}}")
+	})
+	proxy := model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080}
+	b.ReportAllocs()
+	for b.Loop() {
+		if result := checker.Check(context.Background(), proxy); result.Status != model.StatusOK {
+			b.Fatalf("result=%+v", result)
+		}
+	}
 }

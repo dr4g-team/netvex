@@ -1627,3 +1627,50 @@ func TestHTTPSRedirectToHTTPIsRefused(t *testing.T) {
 		t.Fatalf("explicit exception ignored: %+v", allowed)
 	}
 }
+
+func TestForwardModeNeverSendsCleartextPassword(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.Repeat = 3
+	c.Config.AllowRemoteDNS = true
+	c.Config.NoCleartextCredentials = true
+	c.Connector.AllowRemoteDNS = true
+	received := make(chan string, 1)
+	c.Connector.DialContext = pipeDial(func(conn net.Conn) {
+		request, err := http.ReadRequest(bufio.NewReader(conn))
+		if err == nil {
+			received <- request.Header.Get("Proxy-Authorization")
+		}
+	})
+	proxy := model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080, Credentials: &model.Credentials{Username: "user", Password: "secret"}}
+	result := c.Check(context.Background(), proxy)
+	if result.Status != model.StatusPolicyBlock || result.Attempts != 1 || result.Observations[0].Code != "cleartext_credentials_refused" {
+		t.Fatalf("result=%+v", result)
+	}
+	select {
+	case header := <-received:
+		t.Fatalf("request reached the proxy with %q", header)
+	default:
+	}
+}
+
+func TestRedirectAccumulatesTimeToFirstByte(t *testing.T) {
+	c := baseChecker("http://target.test/start")
+	c.Config.Repeat = 1
+	var served atomic.Int64
+	c.Connector.DialContext = pipeDial(func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		_, _ = http.ReadRequest(reader)
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+		_, _ = http.ReadRequest(reader)
+		time.Sleep(20 * time.Millisecond)
+		if served.Add(1) == 1 {
+			_, _ = io.WriteString(conn, "HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\n\r\n")
+			return
+		}
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+	})
+	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	if result.Status != model.StatusOK || result.Observations[0].Timings.TTFBMS < 35 {
+		t.Fatalf("result=%+v", result.Observations)
+	}
+}

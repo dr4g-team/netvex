@@ -164,3 +164,120 @@ func FuzzDigestChallenge(f *testing.F) {
 		}
 	})
 }
+
+// recordingProxy keeps every request so a test can prove what was never sent.
+func recordingProxy(reply string, requests chan<- *http.Request) func(context.Context, string, string) (net.Conn, error) {
+	return func(context.Context, string, string) (net.Conn, error) {
+		client, server := net.Pipe()
+		go func() {
+			defer server.Close()
+			reader := bufio.NewReader(server)
+			request, err := http.ReadRequest(reader)
+			if err != nil {
+				return
+			}
+			requests <- request
+			_, _ = io.WriteString(server, reply)
+			_, _ = io.Copy(io.Discard, reader)
+		}()
+		return client, nil
+	}
+}
+
+func TestProtectedCredentialsNeverReachBasicProxy(t *testing.T) {
+	requests := make(chan *http.Request, 4)
+	connector := Connector{ProtectCredentials: true, DialContext: recordingProxy("HTTP/1.1 407 Auth\r\nProxy-Authenticate: Basic realm=\"r\"\r\nContent-Length: 0\r\n\r\n", requests)}
+	proxy := model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy", Port: 8080, Credentials: &model.Credentials{Username: "user", Password: "secret"}}
+	_, err := connector.Open(context.Background(), proxy, destination())
+	var classified *Error
+	if !errors.As(err, &classified) || classified.Code != "cleartext_credentials_refused" || classified.Status != model.StatusPolicyBlock {
+		t.Fatalf("err=%v", err)
+	}
+	if request := <-requests; request.Header.Get("Proxy-Authorization") != "" {
+		t.Fatalf("credentials were sent: %v", request.Header)
+	}
+	if len(requests) != 0 {
+		t.Fatal("proxy received a second request")
+	}
+}
+
+func TestProtectedCredentialsStillUseDigest(t *testing.T) {
+	var connections atomic.Int64
+	connector := Connector{ProtectCredentials: true, DialContext: digestProxy("SHA-256", "right", &connections)}
+	proxy := model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy", Port: 8080, Credentials: &model.Credentials{Username: "user", Password: "right"}}
+	opened, err := connector.Open(context.Background(), proxy, destination())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Conn.Close()
+	if opened.AuthMethod != "digest" {
+		t.Fatalf("method=%q", opened.AuthMethod)
+	}
+}
+
+func TestProtectedCredentialsAllowOpenProxies(t *testing.T) {
+	requests := make(chan *http.Request, 1)
+	connector := Connector{ProtectCredentials: true, DialContext: recordingProxy("HTTP/1.1 200 Connection Established\r\n\r\n", requests)}
+	proxy := model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy", Port: 8080, Credentials: &model.Credentials{Username: "user", Password: "secret"}}
+	opened, err := connector.Open(context.Background(), proxy, destination())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Conn.Close()
+	if opened.AuthMethod != "none" || (<-requests).Header.Get("Proxy-Authorization") != "" {
+		t.Fatalf("method=%q", opened.AuthMethod)
+	}
+}
+
+func TestProtectedCredentialsRefuseSOCKSBeforeSendingThem(t *testing.T) {
+	for _, protocolName := range []model.Protocol{model.ProtocolSOCKS5, model.ProtocolSOCKS4} {
+		connector := pipeConnector(func(conn net.Conn) { _, _ = io.Copy(io.Discard, conn) })
+		connector.ProtectCredentials = true
+		proxy := model.Proxy{Protocol: protocolName, Host: "proxy", Port: 1080, Credentials: &model.Credentials{Username: "user"}}
+		_, err := connector.Open(context.Background(), proxy, destination())
+		var classified *Error
+		if !errors.As(err, &classified) || classified.Code != "cleartext_credentials_refused" {
+			t.Fatalf("%s: err=%v", protocolName, err)
+		}
+	}
+}
+
+func TestBytesAfterConnectReplyAreNotLost(t *testing.T) {
+	connector := pipeConnector(func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		_, _ = http.ReadRequest(reader)
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\nearly")
+		_, _ = io.Copy(io.Discard, reader)
+	})
+	proxy := model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy", Port: 8080}
+	opened, err := connector.Open(context.Background(), proxy, destination())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer opened.Conn.Close()
+	received := make([]byte, 5)
+	if _, err := io.ReadFull(opened.Conn, received); err != nil || string(received) != "early" {
+		t.Fatalf("received=%q err=%v", received, err)
+	}
+}
+
+func TestPooledReaderDoesNotLeakBetweenResponses(t *testing.T) {
+	for _, body := range []string{"first-response", "second"} {
+		client, server := net.Pipe()
+		go func() {
+			defer server.Close()
+			fmt.Fprintf(server, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+		}()
+		response, release, err := ReadResponseReleased(client, &http.Request{Method: http.MethodGet}, 4096)
+		if err != nil {
+			t.Fatal(err)
+		}
+		payload, err := io.ReadAll(response.Body)
+		if err != nil || string(payload) != body {
+			t.Fatalf("payload=%q err=%v", payload, err)
+		}
+		_ = response.Body.Close()
+		release()
+		_ = client.Close()
+	}
+}

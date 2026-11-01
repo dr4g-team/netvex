@@ -307,3 +307,20 @@ will compress less. Reusing one buffer moved `BenchmarkRunWriter` from 1,600 B/o
 ```sh
 go test -run '^$' -bench '^BenchmarkRunWriter$' -benchmem -count=3 ./internal/store
 ```
+
+### Complete validation
+
+`BenchmarkCheckLiveProxy` runs one full validation against an in-memory proxy. Reusing
+the request and response buffers, three samples each on 2026-11-01:
+
+| Build | Time/op | Bytes/op | Allocations/op |
+|---|---:|---:|---:|
+| Before | 97.8 us | 27,264 | 148 |
+| Current | 81.6 us | 14,681 | 141 |
+
+The fixture's own allocations are included, and network time dominates real runs, so
+the memory figure matters more than the time.
+
+```sh
+go test -run '^$' -bench '^BenchmarkCheckLiveProxy$' -benchmem -count=3 ./internal/engine
+```

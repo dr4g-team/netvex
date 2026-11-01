@@ -61,6 +61,17 @@ type Connector struct {
 	Dialer         *net.Dialer
 	ProxyDNS       *ProxyDNSCache
 	TLSConfig      *tls.Config
+	// ProtectCredentials refuses to send a password a passive observer could read.
+	ProtectCredentials bool
+}
+
+// withoutCredentials asks httpConnect for an unauthenticated CONNECT, used to learn
+// what a plaintext proxy accepts before anything secret is sent.
+const withoutCredentials = "-"
+
+// CleartextRefused is the error for credentials that would travel unprotected.
+func CleartextRefused() error {
+	return &Error{Stage: model.StageNegotiate, Status: model.StatusPolicyBlock, Code: "cleartext_credentials_refused", Detail: "this proxy would receive the password without encryption; --no-cleartext-credentials refused to send it"}
 }
 
 // Dialed is a proxy connection opened before any protocol negotiation.
@@ -170,15 +181,24 @@ func (c Connector) open(ctx context.Context, proxy model.Proxy, dest policy.Dest
 		conn = secure
 	}
 	negStart := time.Now()
+	guarded := c.ProtectCredentials && proxy.Credentials != nil && proxy.Protocol != model.ProtocolHTTPS
+	if guarded && proxy.Protocol != model.ProtocolHTTP {
+		return TimedConn{}, CleartextRefused()
+	}
 	switch proxy.Protocol {
 	case model.ProtocolHTTP, model.ProtocolHTTPS:
 		if proxy.Credentials != nil {
 			authMethod = "basic"
 		}
 		if dest.URL.Scheme == "https" || !c.AllowRemoteDNS {
+			probing := guarded && authorization == ""
+			if probing {
+				authorization = withoutCredentials
+			}
 			tunnel, tunnelErr := httpConnect(conn, proxy, dest, c.AllowRemoteDNS, authorization)
 			var classified *Error
-			if authorization == "" && errors.As(tunnelErr, &classified) && classified.digest != nil {
+			retryable := authorization == "" || probing
+			if retryable && errors.As(tunnelErr, &classified) && classified.digest != nil {
 				// A proxy usually closes after a 407, so the answer needs a new connection.
 				answer, answerErr := classified.digest.answer(proxy.Credentials, http.MethodConnect, connectAuthority(dest, c.AllowRemoteDNS))
 				if answerErr != nil {
@@ -188,11 +208,17 @@ func (c Connector) open(ctx context.Context, proxy model.Proxy, dest policy.Dest
 				ok = true
 				return c.open(ctx, proxy, dest, nil, answer)
 			}
+			if probing && errors.As(tunnelErr, &classified) && classified.Status == model.StatusAuthFailed {
+				return TimedConn{}, CleartextRefused()
+			}
 			if tunnelErr != nil {
 				return TimedConn{}, tunnelErr
 			}
 			conn = tunnel
-			if authorization != "" {
+			switch {
+			case probing:
+				authMethod = "none"
+			case authorization != "":
 				authMethod = "digest"
 			}
 		}
@@ -246,7 +272,9 @@ func httpConnect(conn net.Conn, proxy model.Proxy, dest policy.Destination, remo
 	authority := connectAuthority(dest, remoteDNS)
 	var b strings.Builder
 	fmt.Fprintf(&b, "CONNECT %s HTTP/1.1\r\nHost: %s\r\nUser-Agent: %s\r\n", authority, authority, buildinfo.UserAgent())
-	if authorization != "" {
+	if authorization == withoutCredentials {
+		// Nothing secret goes out; the reply reveals what the proxy requires.
+	} else if authorization != "" {
 		fmt.Fprintf(&b, "Proxy-Authorization: %s\r\n", authorization)
 	} else if proxy.Credentials != nil {
 		token := base64.StdEncoding.EncodeToString([]byte(proxy.Credentials.Username + ":" + proxy.Credentials.Password))
@@ -256,12 +284,20 @@ func httpConnect(conn net.Conn, proxy model.Proxy, dest policy.Destination, remo
 	if err := writeStringFull(conn, b.String()); err != nil {
 		return nil, classifyNet(model.StageTunnel, "connect_write", err)
 	}
-	resp, tunnel, err := ReadResponseLimited(conn, &http.Request{Method: http.MethodConnect}, 64<<10)
+	resp, source, err := readResponse(conn, &http.Request{Method: http.MethodConnect}, 64<<10)
 	if err != nil {
 		return nil, &Error{Stage: model.StageTunnel, Status: model.StatusFailed, Code: "invalid_connect_response", Detail: "HTTP proxy returned an invalid or oversized CONNECT response", Err: err}
 	}
 	if resp.Body != nil {
 		_ = resp.Body.Close()
+	}
+	// A proxy that sends tunnel bytes with its reply needs the reader kept. Almost
+	// none do, so the usual tunnel is the plain connection.
+	var tunnel net.Conn = conn
+	if source.Buffered() > 0 {
+		tunnel = &readerConn{Conn: conn, r: source}
+	} else {
+		putResponseReader(source)
 	}
 	if resp.StatusCode == http.StatusProxyAuthRequired {
 		return nil, HTTPProxyAuthError(resp, proxy.Credentials != nil)
@@ -280,11 +316,11 @@ func HTTPProxyAuthError(resp *http.Response, supplied bool) error {
 	if !supplied {
 		return &Error{Stage: model.StageNegotiate, Status: model.StatusAuthFailed, Code: "proxy_auth_required", Detail: "HTTP proxy requires credentials"}
 	}
+	digest := parseDigestChallenge(resp.Header.Values("Proxy-Authenticate"))
 	challenges := resp.Header.Values("Proxy-Authenticate")
 	schemes := proxyAuthSchemes(challenges)
 	if len(schemes) > 0 {
 		if _, basic := schemes["basic"]; !basic {
-			digest := parseDigestChallenge(challenges)
 			names := make([]string, 0, len(schemes))
 			for name := range schemes {
 				names = append(names, name)
@@ -294,7 +330,7 @@ func HTTPProxyAuthError(resp *http.Response, supplied bool) error {
 			return &Error{Stage: model.StageNegotiate, Status: model.StatusAuthFailed, Code: "proxy_auth_unsupported", Detail: "HTTP proxy requires unsupported authentication scheme(s): " + strings.Join(names, ","), digest: digest}
 		}
 	}
-	return &Error{Stage: model.StageNegotiate, Status: model.StatusAuthFailed, Code: "proxy_auth_rejected", Detail: "HTTP proxy rejected the supplied credentials"}
+	return &Error{Stage: model.StageNegotiate, Status: model.StatusAuthFailed, Code: "proxy_auth_rejected", Detail: "HTTP proxy rejected the supplied credentials", digest: digest}
 }
 
 // boundedSchemes limits text chosen by the remote proxy. One oversized scheme
@@ -394,21 +430,57 @@ func (r *headerLimitReader) Read(data []byte) (int, error) {
 	return n, err
 }
 
-func ReadResponseLimited(conn net.Conn, req *http.Request, maxHeader int) (*http.Response, net.Conn, error) {
+// responseReaders reuses the buffered reader of every proxy response. Allocating
+// these was about a third of the memory used by a validation.
+var responseReaders = sync.Pool{New: func() any { return bufio.NewReaderSize(nil, 4096) }}
+
+// readResponse returns the response and the reader holding any bytes after its
+// headers. The caller owns the reader until it calls putResponseReader.
+func readResponse(conn net.Conn, req *http.Request, maxHeader int) (*http.Response, *bufio.Reader, error) {
 	if maxHeader < 1 {
 		maxHeader = 64 << 10
 	}
 	limited := &headerLimitReader{r: conn, remaining: maxHeader}
-	source := bufio.NewReaderSize(limited, min(maxHeader, 4096))
+	source := responseReaders.Get().(*bufio.Reader)
+	source.Reset(limited)
 	resp, err := http.ReadResponse(source, req)
 	if err != nil {
+		putResponseReader(source)
 		return nil, nil, err
 	}
 	if !limited.done {
 		_ = resp.Body.Close()
+		putResponseReader(source)
 		return nil, nil, errors.New("HTTP response headers require CRLF line endings")
 	}
+	return resp, source, nil
+}
+
+// putResponseReader drops the connection reference before pooling, so an idle
+// buffer can never keep a socket or a stale proxy response alive.
+func putResponseReader(source *bufio.Reader) {
+	source.Reset(nil)
+	responseReaders.Put(source)
+}
+
+// ReadResponseLimited keeps the reader for the life of the returned connection,
+// which is required when bytes may already be buffered behind the headers.
+func ReadResponseLimited(conn net.Conn, req *http.Request, maxHeader int) (*http.Response, net.Conn, error) {
+	resp, source, err := readResponse(conn, req, maxHeader)
+	if err != nil {
+		return nil, nil, err
+	}
 	return resp, &readerConn{Conn: conn, r: source}, nil
+}
+
+// ReadResponseReleased is for callers that finish with the response before the
+// connection. release must run after the body is no longer read.
+func ReadResponseReleased(conn net.Conn, req *http.Request, maxHeader int) (*http.Response, func(), error) {
+	resp, source, err := readResponse(conn, req, maxHeader)
+	if err != nil {
+		return nil, nil, err
+	}
+	return resp, func() { putResponseReader(source) }, nil
 }
 
 // sniffProbe is a SOCKS5 greeting offering no-auth and username/password, followed

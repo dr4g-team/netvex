@@ -61,31 +61,33 @@ type Config struct {
 	AllowPrivateProxy bool                     `json:"allow_private_proxies"`
 	PinSHA256         []string                 `json:"pin_sha256,omitempty"`
 	AllowDowngrade    bool                     `json:"allow_redirect_downgrade"`
-	RetryPermanent    bool                     `json:"retry_permanent_failures"`
-	SkipConnectRetry  bool                     `json:"skip_connect_retry"`
-	TLSClassicalKEX   bool                     `json:"tls_classical_kex"`
-	ProbeUDP          bool                     `json:"probe_udp"`
-	ExpectCountries   []string                 `json:"expect_countries,omitempty"`
-	CanaryInterval    time.Duration            `json:"-"`
-	CanaryRaw         string                   `json:"canary_interval"`
-	Prescreen         bool                     `json:"prescreen"`
-	PrescreenWorkers  int                      `json:"prescreen_concurrency"`
-	PrescreenRetries  int                      `json:"prescreen_retries"`
-	PrescreenTimeout  time.Duration            `json:"-"`
-	PrescreenRaw      string                   `json:"prescreen_timeout"`
-	StopOnSuccess     bool                     `json:"stop_on_success"`
-	RetryBackoff      time.Duration            `json:"-"`
-	RetryBackoffRaw   string                   `json:"retry_backoff"`
-	DNSCacheTTL       time.Duration            `json:"-"`
-	DNSCacheTTLRaw    string                   `json:"dns_cache_ttl"`
-	ProxyDNSCacheTTL  time.Duration            `json:"-"`
-	ProxyDNSCacheRaw  string                   `json:"proxy_dns_cache_ttl"`
-	AllowedHosts      []string                 `json:"allowed_target_hosts"`
-	DataDir           string                   `json:"data_dir"`
-	Save              bool                     `json:"save"`
-	SaveGzip          bool                     `json:"save_gzip"`
-	ProgressInterval  time.Duration            `json:"-"`
-	ProgressRaw       string                   `json:"progress_interval"`
+	// NoCleartextCredentials refuses to send passwords to proxies without encryption.
+	NoCleartextCredentials bool          `json:"no_cleartext_credentials"`
+	RetryPermanent         bool          `json:"retry_permanent_failures"`
+	SkipConnectRetry       bool          `json:"skip_connect_retry"`
+	TLSClassicalKEX        bool          `json:"tls_classical_kex"`
+	ProbeUDP               bool          `json:"probe_udp"`
+	ExpectCountries        []string      `json:"expect_countries,omitempty"`
+	CanaryInterval         time.Duration `json:"-"`
+	CanaryRaw              string        `json:"canary_interval"`
+	Prescreen              bool          `json:"prescreen"`
+	PrescreenWorkers       int           `json:"prescreen_concurrency"`
+	PrescreenRetries       int           `json:"prescreen_retries"`
+	PrescreenTimeout       time.Duration `json:"-"`
+	PrescreenRaw           string        `json:"prescreen_timeout"`
+	StopOnSuccess          bool          `json:"stop_on_success"`
+	RetryBackoff           time.Duration `json:"-"`
+	RetryBackoffRaw        string        `json:"retry_backoff"`
+	DNSCacheTTL            time.Duration `json:"-"`
+	DNSCacheTTLRaw         string        `json:"dns_cache_ttl"`
+	ProxyDNSCacheTTL       time.Duration `json:"-"`
+	ProxyDNSCacheRaw       string        `json:"proxy_dns_cache_ttl"`
+	AllowedHosts           []string      `json:"allowed_target_hosts"`
+	DataDir                string        `json:"data_dir"`
+	Save                   bool          `json:"save"`
+	SaveGzip               bool          `json:"save_gzip"`
+	ProgressInterval       time.Duration `json:"-"`
+	ProgressRaw            string        `json:"progress_interval"`
 }
 
 type ResponseRules struct {
@@ -216,6 +218,7 @@ func applyEnv(c *Config) error {
 			{"NETVEX_ALLOW_REMOTE_DNS", &c.AllowRemoteDNS},
 			{"NETVEX_ALLOW_PRIVATE_PROXIES", &c.AllowPrivateProxy},
 			{"NETVEX_ALLOW_REDIRECT_DOWNGRADE", &c.AllowDowngrade},
+			{"NETVEX_NO_CLEARTEXT_CREDENTIALS", &c.NoCleartextCredentials},
 			{"NETVEX_RETRY_PERMANENT_FAILURES", &c.RetryPermanent},
 			{"NETVEX_SKIP_CONNECT_RETRY", &c.SkipConnectRetry},
 			{"NETVEX_TLS_CLASSICAL_KEX", &c.TLSClassicalKEX},

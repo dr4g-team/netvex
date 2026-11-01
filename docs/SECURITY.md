@@ -70,6 +70,10 @@ a corporate or malicious trusted root. `--pin-sha256` closes that gap for known
 destinations. Redirects from HTTPS to HTTP are refused because they would continue
 validation over plaintext the proxy can rewrite.
 
+Plain HTTP and SOCKS proxies receive passwords in readable form. Operators who
+cannot accept that on a given network can set `--no-cleartext-credentials`, verified
+by fixtures that record exactly what the proxy received.
+
 Explicit exceptions `--allow-private-targets`, `--allow-private-proxies`,
 `--allow-redirect-downgrade`, and `--allow-remote-dns` reduce protection and exist for controlled labs. Private-target mode can reach internal
 services through supplied proxies, but invalid, unspecified, and multicast

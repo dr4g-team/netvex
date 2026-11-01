@@ -364,6 +364,7 @@ type RunConfiguration struct {
 	TLSClassicalKEX   bool     `json:"tls_classical_kex,omitempty"`
 	ProbeUDP          bool     `json:"probe_udp,omitempty"`
 	CertificatePins   int      `json:"certificate_pins,omitempty"`
+	NoCleartextCreds  bool     `json:"no_cleartext_credentials,omitempty"`
 	AllowDowngrade    bool     `json:"allow_redirect_downgrade,omitempty"`
 	ExpectCountries   []string `json:"expect_countries,omitempty"`
 	CanaryInterval    string   `json:"canary_interval,omitempty"`

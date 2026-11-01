@@ -34,7 +34,7 @@ type checkOptions struct {
 	cpuProfile, memProfile                                      string
 	noProgress, resumeAnyConfig, probeUDP, saveGzip             bool
 	expectCountries, pinSHA256                                  stringsFlag
-	allowDowngrade                                              bool
+	allowDowngrade, noCleartext                                 bool
 	dataDir                                                     string
 	maxRedirects                                                int
 	requireCount                                                int
@@ -65,7 +65,7 @@ var checkFlagGroups = []struct {
 	names []string
 }{
 	{"Input", []string{"input-format", "protocol", "max-input-bytes", "max-input-entries", "no-deduplicate", "scenario", "label"}},
-	{"Targets and policy", []string{"target", "allow-host", "allow-private-targets", "allow-private-proxies", "allow-remote-dns", "allow-redirect-downgrade", "max-redirects", "preflight", "canary-interval", "target-matrix", "target-quorum"}},
+	{"Targets and policy", []string{"target", "allow-host", "allow-private-targets", "allow-private-proxies", "allow-remote-dns", "allow-redirect-downgrade", "no-cleartext-credentials", "max-redirects", "preflight", "canary-interval", "target-matrix", "target-quorum"}},
 	{"Speed and concurrency", []string{"profile", "concurrency", "queue-size", "per-target", "rate", "prescreen", "prescreen-concurrency", "prescreen-retries", "prescreen-timeout", "no-connect-retry", "tls-classical-kex", "dns-cache-ttl", "proxy-dns-cache-ttl"}},
 	{"Timeouts and retries", []string{"connect-timeout", "request-timeout", "auto-probe-timeout", "repeat", "min-success-rate", "retry-backoff", "retry-permanent", "stop-on-success"}},
 	{"Response rules", []string{"require-text", "reject-text", "expect-json", "expect-sha256", "pin-sha256", "expect-country", "min-response-bytes", "max-response-bytes", "min-throughput-kbps", "intelligence-bytes"}},
@@ -163,6 +163,7 @@ func (c CLI) addCheckFlags(fs *flag.FlagSet, o *checkOptions) {
 	fs.BoolVar(&o.resumeAnyConfig, "resume-any-config", false, "resume even if the checkpoint used different validation rules")
 	fs.BoolVar(&o.probeUDP, "probe-udp", false, "ask working SOCKS5 proxies for UDP ASSOCIATE (control channel only)")
 	fs.Var(&o.pinSHA256, "pin-sha256", "accepted SHA-256 of the destination certificate; detects TLS interception (repeatable)")
+	fs.BoolVar(&o.noCleartext, "no-cleartext-credentials", false, "never send a proxy password without encryption; Digest and TLS proxies still work")
 	fs.BoolVar(&o.allowDowngrade, "allow-redirect-downgrade", false, "follow redirects from HTTPS to plain HTTP")
 	fs.Var(&o.expectCountries, "expect-country", "required exit country code from the metadata file (repeatable)")
 	fs.StringVar(&o.canaryInterval, "canary-interval", "", "check targets directly at this interval during the run; 0 disables")
@@ -321,6 +322,7 @@ func applyPolicyFlags(cfg *config.Config, o checkOptions) {
 	override(&cfg.AllowRemoteDNS, o.allowRemoteDNS, o.allowRemoteDNS || o.explicit["allow-remote-dns"])
 	override(&cfg.AllowPrivateProxy, o.allowPrivateProxies, o.allowPrivateProxies || o.explicit["allow-private-proxies"])
 	override(&cfg.AllowDowngrade, o.allowDowngrade, o.allowDowngrade || o.explicit["allow-redirect-downgrade"])
+	override(&cfg.NoCleartextCredentials, o.noCleartext, o.noCleartext || o.explicit["no-cleartext-credentials"])
 	override(&cfg.PinSHA256, []string(o.pinSHA256), len(o.pinSHA256) > 0)
 	if len(o.targets) > 0 {
 		cfg.Targets = []string(o.targets)
@@ -433,7 +435,7 @@ func runConfiguration(cfg config.Config, proto model.Protocol, o checkOptions) m
 		Repeat: cfg.Repeat, MinSuccessRate: cfg.MinSuccessRate, ConnectTimeout: cfg.ConnectTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(), AutoProbeTimeout: cfg.AutoProbeTimeout.String(),
 		RetryBackoff: cfg.RetryBackoff.String(), StopOnSuccess: cfg.StopOnSuccess,
 		RetryPermanent: cfg.RetryPermanent, AllowRemoteDNS: cfg.AllowRemoteDNS, AllowPrivateProxy: cfg.AllowPrivateProxy,
-		CertificatePins: len(cfg.PinSHA256), AllowDowngrade: cfg.AllowDowngrade, ProbeUDP: cfg.ProbeUDP, ExpectCountries: cfg.ExpectCountries, CanaryInterval: canaryInterval(cfg), SaveStatus: o.saveStatus, SaveGzip: cfg.Save && cfg.SaveGzip,
+		NoCleartextCreds: cfg.NoCleartextCredentials, CertificatePins: len(cfg.PinSHA256), AllowDowngrade: cfg.AllowDowngrade, ProbeUDP: cfg.ProbeUDP, ExpectCountries: cfg.ExpectCountries, CanaryInterval: canaryInterval(cfg), SaveStatus: o.saveStatus, SaveGzip: cfg.Save && cfg.SaveGzip,
 		SkipConnectRetry: cfg.SkipConnectRetry, TLSClassicalKEX: cfg.TLSClassicalKEX, Prescreen: cfg.Prescreen, PrescreenWorkers: prescreenWorkers(cfg), PrescreenRetries: cfg.PrescreenRetries, ProxyDNSCacheTTL: cfg.ProxyDNSCacheTTL.String(),
 		MaxResponseBytes: cfg.MaxResponseBytes, IntelligenceBytes: min(cfg.IntelligenceBytes, cfg.MaxResponseBytes), MinResponseBytes: cfg.MinResponseBytes, MinThroughput: cfg.MinThroughputKBPS,
 		ContentRules:    len(cfg.RequireText) + len(cfg.RejectText) + len(cfg.ExpectJSON),

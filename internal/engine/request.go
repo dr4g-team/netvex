@@ -1,15 +1,18 @@
 package engine
 
 import (
+	"bufio"
 	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/drag-team/netvex/internal/buildinfo"
@@ -67,23 +70,22 @@ func (c *Checker) requestWithRedirects(ctx context.Context, p model.Proxy, dest 
 	req.Header.Set("Accept-Encoding", "identity")
 	req.Close = true
 	forwardMode := (p.Protocol == model.ProtocolHTTP || p.Protocol == model.ProtocolHTTPS) && dest.URL.Scheme == "http" && c.Config.AllowRemoteDNS
+	if forwardMode && p.Credentials != nil && c.Config.NoCleartextCredentials && p.Protocol == model.ProtocolHTTP {
+		return obs, protocol.CleartextRefused()
+	}
 	if forwardMode && p.Credentials != nil {
 		req.Header.Set("Proxy-Authorization", "Basic "+basicToken(p.Credentials.Username, p.Credentials.Password))
 	}
 	writeStart := time.Now()
-	if forwardMode {
-		err = req.WriteProxy(conn)
-	} else {
-		err = req.Write(conn)
-	}
-	if err != nil {
+	if err = writeRequest(conn, req, forwardMode); err != nil {
 		return obs, &protocol.Error{Stage: model.StageRequest, Status: statusFor(err), Code: "request_write", Detail: "failed to send request", Err: err}
 	}
-	resp, _, err := protocol.ReadResponseLimited(conn, req, 64<<10)
+	resp, release, err := protocol.ReadResponseReleased(conn, req, 64<<10)
 	if err != nil {
 		return obs, &protocol.Error{Stage: model.StageResponse, Status: statusFor(err), Code: "response_read", Detail: "failed to read HTTP response", Err: err}
 	}
 	obs.Timings.TTFBMS = ms(time.Since(writeStart))
+	defer release()
 	defer resp.Body.Close()
 	obs.HTTPStatus = resp.StatusCode
 	obs.ResponseHeaders = selectedHeaders(resp.Header)
@@ -186,6 +188,29 @@ func (c *Checker) inspectResponse(obs *model.Observation, resp *http.Response, r
 	return nil
 }
 
+// requestWriters holds the buffer http.Request.Write would otherwise allocate for
+// every request, because a connection is not an io.ByteWriter.
+var requestWriters = sync.Pool{New: func() any { return bufio.NewWriterSize(nil, 1024) }}
+
+func writeRequest(conn net.Conn, req *http.Request, forwardMode bool) error {
+	writer := requestWriters.Get().(*bufio.Writer)
+	defer func() {
+		writer.Reset(nil)
+		requestWriters.Put(writer)
+	}()
+	writer.Reset(conn)
+	var err error
+	if forwardMode {
+		err = req.WriteProxy(writer)
+	} else {
+		err = req.Write(writer)
+	}
+	if err != nil {
+		return err
+	}
+	return writer.Flush()
+}
+
 // throughputKBPS treats a zero duration as one coarse clock tick. Windows clocks
 // can report no elapsed time for a fast transfer, and calling that zero throughput
 // would fail --min-throughput-kbps on the fastest proxies. The tick gives a lower
@@ -219,6 +244,7 @@ func (c *Checker) followRedirect(ctx context.Context, p model.Proxy, u *url.URL,
 		next.Timings.ProxyTLSMS += prior.Timings.ProxyTLSMS
 		next.Timings.TunnelMS += prior.Timings.TunnelMS
 		next.Timings.TLSMS += prior.Timings.TLSMS
+		next.Timings.TTFBMS += prior.Timings.TTFBMS
 		next.Timings.BodyMS += prior.Timings.BodyMS
 	}
 	return next, err

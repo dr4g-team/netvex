@@ -67,7 +67,7 @@ func NewChecker(c config.Config) *Checker {
 	if !c.AllowPrivateProxy {
 		dialer.ControlContext = protocol.GatewayGuard
 	}
-	connector := protocol.Connector{ConnectTimeout: c.ConnectTimeout, AllowRemoteDNS: c.AllowRemoteDNS, ClassicalKEX: c.TLSClassicalKEX, Dialer: dialer}
+	connector := protocol.Connector{ConnectTimeout: c.ConnectTimeout, AllowRemoteDNS: c.AllowRemoteDNS, ClassicalKEX: c.TLSClassicalKEX, ProtectCredentials: c.NoCleartextCredentials, Dialer: dialer}
 	if c.ProxyDNSCacheTTL > 0 {
 		connector.ProxyDNS = protocol.NewProxyDNSCache(c.ProxyDNSCacheTTL, min(c.MaxInputEntries, 4096))
 	}
@@ -176,7 +176,7 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		if !c.Config.TargetMatrix && obs.Status == model.StatusOK && c.Config.StopOnSuccess && r.Successes >= plan.required {
 			break
 		}
-		globalPermanent := obs.Status == model.StatusAuthFailed || obs.Status == model.StatusInvalid || obs.Code == "proxy_gateway_blocked" || (!c.Config.TargetMatrix && obs.Status == model.StatusPolicyBlock)
+		globalPermanent := obs.Status == model.StatusAuthFailed || obs.Status == model.StatusInvalid || obs.Code == "proxy_gateway_blocked" || obs.Code == "cleartext_credentials_refused" || (!c.Config.TargetMatrix && obs.Status == model.StatusPolicyBlock)
 		if !c.Config.RetryPermanent && globalPermanent {
 			break
 		}
