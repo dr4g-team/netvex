@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/drag-team/netvex/internal/buildinfo"
@@ -53,6 +54,14 @@ type Checker struct {
 	expectedTargets   []string
 	IncludeInputProxy bool
 	IdentityKey       func() []byte
+
+	expectCountries    map[string]struct{}
+	canaryProbe        func(context.Context, string) model.TargetHealth
+	canaryDown         atomic.Pointer[map[string]struct{}]
+	canaryChecks       atomic.Int64
+	canaryFailures     atomic.Int64
+	canaryOutages      atomic.Int64
+	canaryReclassified atomic.Int64
 }
 
 type jsonExpectation struct {
@@ -314,6 +323,12 @@ func NewChecker(c config.Config) *Checker {
 		connector.ProxyDNS = protocol.NewProxyDNSCache(c.ProxyDNSCacheTTL, min(c.MaxInputEntries, 4096))
 	}
 	checker := &Checker{Config: c, Policy: policy.New(c.AllowPrivate, c.AllowedHosts), Connector: connector, targetSem: make(map[string]chan struct{}), resolved: make(map[string]*resolveEntry), baseline: baseline.Unmap(), targetRules: make(map[string]compiledResponseRules), effectiveRules: make(map[string]compiledResponseRules, len(c.Targets)), targetNames: make(map[string]string, len(c.Targets)), expectedTargets: make([]string, 0, len(c.Targets))}
+	if len(c.ExpectCountries) > 0 {
+		checker.expectCountries = make(map[string]struct{}, len(c.ExpectCountries))
+		for _, country := range c.ExpectCountries {
+			checker.expectCountries[strings.ToUpper(country)] = struct{}{}
+		}
+	}
 	for _, rule := range c.RequireText {
 		checker.requireText = append(checker.requireText, strings.ToLower(rule))
 	}
@@ -434,10 +449,11 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		if intervalDue && !c.waitInterval(ctx) {
 			break
 		}
-		if !c.waitRate(ctx) {
+		if !c.waitTargetHealthy(ctx, target) || !c.waitRate(ctx) {
 			break
 		}
 		obs := c.attempt(ctx, p, target, i+1)
+		c.reclassifyDuringOutage(&obs, target)
 		if r.Observations == nil {
 			r.Observations = make([]model.Observation, 0, min(plan.attempts, 8))
 		}
@@ -469,7 +485,40 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		}
 	}
 	c.conclude(ctx, &r, p, plan)
+	c.probeCapabilities(ctx, &r, p)
 	return r
+}
+
+func (c *Checker) probeCapabilities(ctx context.Context, r *model.Result, p model.Proxy) {
+	if !c.Config.ProbeUDP || r.Successes == 0 || r.Protocol != model.ProtocolSOCKS5 {
+		return
+	}
+	p.Protocol = model.ProtocolSOCKS5
+	probeCtx, cancel := context.WithTimeout(ctx, c.Config.RequestTimeout)
+	defer cancel()
+	if r.Capabilities == nil {
+		r.Capabilities = &model.Capabilities{}
+	}
+	r.Capabilities.UDPAssociate = c.Connector.ProbeUDP(probeCtx, p)
+}
+
+func observedCapabilities(observations []model.Observation) *model.Capabilities {
+	var capabilities *model.Capabilities
+	for _, observation := range observations {
+		address, err := netip.ParseAddr(observation.ExitIP)
+		if err != nil {
+			continue
+		}
+		if capabilities == nil {
+			capabilities = &model.Capabilities{}
+		}
+		if address.Unmap().Is4() {
+			capabilities.ExitIPv4 = true
+		} else {
+			capabilities.ExitIPv6 = true
+		}
+	}
+	return capabilities
 }
 
 // conclude derives the verdict and every aggregate from the observations.
@@ -510,8 +559,9 @@ func (c *Checker) conclude(ctx context.Context, r *model.Result, p model.Proxy, 
 		if p.Protocol == model.ProtocolAuto {
 			exportProxy.Protocol = r.Protocol
 		}
-		r.InputProxy = exportProxy.FullURI()
+		r.Validated = &exportProxy
 	}
+	r.Capabilities = observedCapabilities(r.Observations)
 	r.Score = score.Calculate(r.Observations)
 }
 
@@ -1106,6 +1156,16 @@ func (c *Checker) requestWithRedirects(ctx context.Context, p model.Proxy, dest 
 	if c.Metadata != nil && obs.ExitIP != "" {
 		if metadata, ok := c.Metadata.Lookup(obs.ExitIP); ok {
 			obs.Metadata = &metadata
+		}
+	}
+	if c.expectCountries != nil {
+		country := ""
+		if obs.Metadata != nil {
+			country = strings.ToUpper(obs.Metadata.CountryCode)
+		}
+		if _, expected := c.expectCountries[country]; !expected {
+			obs.Status = model.StatusFailed
+			return obs, &protocol.Error{Stage: model.StageResponse, Status: model.StatusFailed, Code: "country_mismatch", Detail: "exit country is unknown or outside the expected set"}
 		}
 	}
 	return obs, nil

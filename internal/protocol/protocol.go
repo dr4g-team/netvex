@@ -471,6 +471,75 @@ func socks4Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, re
 }
 
 func socks5Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, remoteDNS bool) (string, error) {
+	authMethod, err := socks5Negotiate(conn, proxy)
+	if err != nil {
+		return "", err
+	}
+	port, _ := strconv.ParseUint(dest.Port, 10, 16)
+	req := []byte{5, 1, 0}
+	if remoteDNS {
+		if len(dest.Host) == 0 || len(dest.Host) > 255 {
+			return "", &Error{Stage: model.StageNegotiate, Status: model.StatusInvalid, Code: "socks5_domain_length", Detail: "SOCKS5 destination hostname is outside protocol limits"}
+		}
+		req = append(req, 3, byte(len(dest.Host)))
+		req = append(req, dest.Host...)
+	} else if dest.IP.Is4() {
+		a := dest.IP.As4()
+		req = append(req, 1)
+		req = append(req, a[:]...)
+	} else {
+		a := dest.IP.As16()
+		req = append(req, 4)
+		req = append(req, a[:]...)
+	}
+	req = append(req, byte(port>>8), byte(port))
+	if err := writeFull(conn, req); err != nil {
+		return "", classifyNet(model.StageTunnel, "socks5_connect_write", err)
+	}
+	if err := socks5ReadReply(conn); err != nil {
+		return "", err
+	}
+	return authMethod, nil
+}
+
+// Results of a SOCKS5 UDP ASSOCIATE probe.
+const (
+	UDPSupported   = "supported"
+	UDPUnsupported = "unsupported"
+	UDPUnavailable = "unavailable"
+)
+
+// ProbeUDP asks a SOCKS5 proxy for a UDP relay. It exercises only the control
+// channel: a "supported" answer means the proxy accepts the command, not that
+// datagrams were relayed end to end.
+func (c Connector) ProbeUDP(ctx context.Context, proxy model.Proxy) string {
+	dialed, err := c.Dial(ctx, proxy)
+	if err != nil {
+		return UDPUnavailable
+	}
+	conn := watchContext(ctx, dialed.Conn)
+	defer conn.Close()
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = conn.SetDeadline(deadline)
+	}
+	if _, err := socks5Negotiate(conn, proxy); err != nil {
+		return UDPUnavailable
+	}
+	if err := writeFull(conn, []byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
+		return UDPUnavailable
+	}
+	var classified *Error
+	switch err := socks5ReadReply(conn); {
+	case err == nil:
+		return UDPSupported
+	case errors.As(err, &classified) && (classified.Code == "socks5_command_unsupported" || classified.Code == "socks5_ruleset_denied"):
+		return UDPUnsupported
+	default:
+		return UDPUnavailable
+	}
+}
+
+func socks5Negotiate(conn net.Conn, proxy model.Proxy) (string, error) {
 	methods := []byte{0}
 	if proxy.Credentials != nil {
 		methods = append(methods, 2)
@@ -512,40 +581,24 @@ func socks5Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, re
 	default:
 		return "", &Error{Stage: model.StageNegotiate, Status: model.StatusFailed, Code: "socks5_unsupported_auth", Detail: fmt.Sprintf("SOCKS5 proxy selected unsupported authentication method 0x%02x", resp[1])}
 	}
-	port, _ := strconv.ParseUint(dest.Port, 10, 16)
-	req := []byte{5, 1, 0}
-	if remoteDNS {
-		if len(dest.Host) == 0 || len(dest.Host) > 255 {
-			return "", &Error{Stage: model.StageNegotiate, Status: model.StatusInvalid, Code: "socks5_domain_length", Detail: "SOCKS5 destination hostname is outside protocol limits"}
-		}
-		req = append(req, 3, byte(len(dest.Host)))
-		req = append(req, dest.Host...)
-	} else if dest.IP.Is4() {
-		a := dest.IP.As4()
-		req = append(req, 1)
-		req = append(req, a[:]...)
-	} else {
-		a := dest.IP.As16()
-		req = append(req, 4)
-		req = append(req, a[:]...)
-	}
-	req = append(req, byte(port>>8), byte(port))
-	if err := writeFull(conn, req); err != nil {
-		return "", classifyNet(model.StageTunnel, "socks5_connect_write", err)
-	}
+	return authMethod, nil
+}
+
+// socks5ReadReply consumes one command reply, including its bound address.
+func socks5ReadReply(conn net.Conn) error {
 	head := make([]byte, 4)
 	if _, err := io.ReadFull(conn, head); err != nil {
-		return "", classifyNet(model.StageTunnel, "socks5_connect_read", err)
+		return classifyNet(model.StageTunnel, "socks5_connect_read", err)
 	}
 	if head[0] != 5 {
-		return "", &Error{Stage: model.StageTunnel, Status: model.StatusFailed, Code: "socks5_bad_reply", Detail: "invalid SOCKS5 CONNECT response"}
+		return &Error{Stage: model.StageTunnel, Status: model.StatusFailed, Code: "socks5_bad_reply", Detail: "invalid SOCKS5 CONNECT response"}
 	}
 	if head[2] != 0 {
-		return "", &Error{Stage: model.StageTunnel, Status: model.StatusFailed, Code: "socks5_bad_reserved", Detail: "invalid SOCKS5 reserved response byte"}
+		return &Error{Stage: model.StageTunnel, Status: model.StatusFailed, Code: "socks5_bad_reserved", Detail: "invalid SOCKS5 reserved response byte"}
 	}
 	if head[1] != 0 {
 		code := socks5Reply(head[1])
-		return "", &Error{Stage: model.StageTunnel, Status: socks5ReplyStatus(head[1]), Code: "socks5_" + code, Detail: "SOCKS5 CONNECT failed: " + code}
+		return &Error{Stage: model.StageTunnel, Status: socks5ReplyStatus(head[1]), Code: "socks5_" + code, Detail: "SOCKS5 CONNECT failed: " + code}
 	}
 	var n int
 	switch head[3] {
@@ -556,20 +609,20 @@ func socks5Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, re
 	case 3:
 		l := make([]byte, 1)
 		if _, err := io.ReadFull(conn, l); err != nil {
-			return "", classifyNet(model.StageTunnel, "socks5_bound_read", err)
+			return classifyNet(model.StageTunnel, "socks5_bound_read", err)
 		}
 		n = int(l[0])
 		if n == 0 {
-			return "", &Error{Stage: model.StageTunnel, Status: model.StatusFailed, Code: "socks5_bad_address", Detail: "SOCKS5 returned an empty bound hostname"}
+			return &Error{Stage: model.StageTunnel, Status: model.StatusFailed, Code: "socks5_bad_address", Detail: "SOCKS5 returned an empty bound hostname"}
 		}
 	default:
-		return "", &Error{Stage: model.StageTunnel, Status: model.StatusFailed, Code: "socks5_bad_address", Detail: "invalid SOCKS5 bound address type"}
+		return &Error{Stage: model.StageTunnel, Status: model.StatusFailed, Code: "socks5_bad_address", Detail: "invalid SOCKS5 bound address type"}
 	}
 	tail := make([]byte, n+2)
 	if _, err := io.ReadFull(conn, tail); err != nil {
-		return "", classifyNet(model.StageTunnel, "socks5_bound_read", err)
+		return classifyNet(model.StageTunnel, "socks5_bound_read", err)
 	}
-	return authMethod, nil
+	return nil
 }
 
 func writeFull(writer io.Writer, value []byte) error {

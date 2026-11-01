@@ -62,6 +62,10 @@ type Config struct {
 	RetryPermanent    bool                     `json:"retry_permanent_failures"`
 	SkipConnectRetry  bool                     `json:"skip_connect_retry"`
 	TLSClassicalKEX   bool                     `json:"tls_classical_kex"`
+	ProbeUDP          bool                     `json:"probe_udp"`
+	ExpectCountries   []string                 `json:"expect_countries,omitempty"`
+	CanaryInterval    time.Duration            `json:"-"`
+	CanaryRaw         string                   `json:"canary_interval"`
 	Prescreen         bool                     `json:"prescreen"`
 	PrescreenWorkers  int                      `json:"prescreen_concurrency"`
 	PrescreenRetries  int                      `json:"prescreen_retries"`
@@ -129,7 +133,7 @@ func Defaults() Config {
 		ProxyDNSCacheRaw: "0s",
 		RetryBackoff:     100 * time.Millisecond, RetryBackoffRaw: "100ms",
 		RotationRaw: "0s", Preflight: "off",
-		PrescreenWorkers: 4096, PrescreenRetries: 1, PrescreenRaw: "0s",
+		PrescreenWorkers: 4096, PrescreenRetries: 1, PrescreenRaw: "0s", CanaryRaw: "0s",
 		DataDir: defaultDataDir(), ProgressInterval: 500 * time.Millisecond, ProgressRaw: "500ms",
 	}
 }
@@ -233,6 +237,7 @@ func applyEnv(c *Config) error {
 		{"NETVEX_SKIP_CONNECT_RETRY", &c.SkipConnectRetry},
 		{"NETVEX_TLS_CLASSICAL_KEX", &c.TLSClassicalKEX},
 		{"NETVEX_PRESCREEN", &c.Prescreen},
+		{"NETVEX_PROBE_UDP", &c.ProbeUDP},
 		{"NETVEX_STOP_ON_SUCCESS", &c.StopOnSuccess},
 		{"NETVEX_SAVE", &c.Save},
 		{"NETVEX_TARGET_MATRIX", &c.TargetMatrix},
@@ -291,6 +296,12 @@ func applyEnv(c *Config) error {
 	}
 	if v := os.Getenv("NETVEX_PROXY_DNS_CACHE_TTL"); v != "" {
 		c.ProxyDNSCacheRaw = v
+	}
+	if v := os.Getenv("NETVEX_CANARY_INTERVAL"); v != "" {
+		c.CanaryRaw = v
+	}
+	if v := os.Getenv("NETVEX_EXPECT_COUNTRY"); v != "" {
+		c.ExpectCountries = envList(v)
 	}
 	if v := os.Getenv("NETVEX_PRESCREEN_TIMEOUT"); v != "" {
 		c.PrescreenRaw = v
@@ -399,6 +410,9 @@ func (c *Config) ParseDurations() error {
 	if c.PrescreenTimeout, err = time.ParseDuration(c.PrescreenRaw); err != nil {
 		return fmt.Errorf("invalid prescreen_timeout: %w", err)
 	}
+	if c.CanaryInterval, err = time.ParseDuration(c.CanaryRaw); err != nil {
+		return fmt.Errorf("invalid canary_interval: %w", err)
+	}
 	return nil
 }
 
@@ -441,6 +455,20 @@ func (c Config) Validate() error {
 	}
 	if c.RotationInterval < 0 || c.RotationInterval > time.Hour {
 		return errors.New("rotation_interval must be between 0 and 1h")
+	}
+	if c.CanaryInterval != 0 && (c.CanaryInterval < time.Second || c.CanaryInterval > time.Hour) {
+		return errors.New("canary_interval must be 0 (disabled) or between 1s and 1h")
+	}
+	if len(c.ExpectCountries) > 64 {
+		return errors.New("at most 64 expected countries are allowed")
+	}
+	for _, country := range c.ExpectCountries {
+		if len(country) != 2 || strings.IndexFunc(country, func(r rune) bool { return !unicode.IsLetter(r) || r > unicode.MaxASCII }) >= 0 {
+			return errors.New("expected countries must be two-letter ISO codes")
+		}
+	}
+	if len(c.ExpectCountries) > 0 && c.MetadataFile == "" {
+		return errors.New("expected countries require a metadata file")
 	}
 	if c.PrescreenWorkers < 1 || c.PrescreenWorkers > 65536 {
 		return errors.New("prescreen_concurrency must be between 1 and 65536")
@@ -658,5 +686,6 @@ func (c Config) MarshalJSON() ([]byte, error) {
 	a.RetryBackoffRaw = c.RetryBackoff.String()
 	a.RotationRaw = c.RotationInterval.String()
 	a.PrescreenRaw = c.PrescreenTimeout.String()
+	a.CanaryRaw = c.CanaryInterval.String()
 	return json.MarshalIndent(a, "", "  ")
 }

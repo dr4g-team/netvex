@@ -874,3 +874,32 @@ func FuzzProxyAuthChallenge(f *testing.F) {
 		}
 	})
 }
+
+func TestProbeUDPClassifiesReplies(t *testing.T) {
+	proxy := model.Proxy{Protocol: model.ProtocolSOCKS5, Host: "proxy", Port: 1080}
+	for _, test := range []struct {
+		reply byte
+		want  string
+	}{{0, UDPSupported}, {7, UDPUnsupported}, {2, UDPUnsupported}, {1, UDPUnavailable}} {
+		connector := pipeConnector(func(conn net.Conn) {
+			greeting := make([]byte, 3)
+			_, _ = io.ReadFull(conn, greeting)
+			_, _ = conn.Write([]byte{5, 0})
+			request := make([]byte, 10)
+			_, _ = io.ReadFull(conn, request)
+			if request[1] != 3 {
+				return
+			}
+			_, _ = conn.Write([]byte{5, test.reply, 0, 1, 0, 0, 0, 0, 0, 0})
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		if got := connector.ProbeUDP(ctx, proxy); got != test.want {
+			t.Fatalf("reply %d: got %q want %q", test.reply, got, test.want)
+		}
+		cancel()
+	}
+	refused := Connector{DialContext: func(context.Context, string, string) (net.Conn, error) { return nil, syscall.ECONNREFUSED }}
+	if got := refused.ProbeUDP(context.Background(), proxy); got != UDPUnavailable {
+		t.Fatalf("got %q", got)
+	}
+}

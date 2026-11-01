@@ -183,7 +183,7 @@ func TestCheckEndToEndThroughControlledConnectProxy(t *testing.T) {
 }
 
 func TestSubcommandHelpIsSuccessful(t *testing.T) {
-	for _, cmd := range []string{"check", "import", "results", "runs", "export", "stats", "history", "pool", "shard", "merge", "explore", "config", "doctor", "bench"} {
+	for _, cmd := range []string{"check", "import", "results", "runs", "export", "stats", "history", "pool", "shard", "merge", "explore", "config", "doctor", "bench", "diff"} {
 		code, out, _ := run([]string{cmd, "--help"}, "")
 		if code != ExitOK || !strings.Contains(out, "Usage of") {
 			t.Fatalf("%s code=%d out=%q", cmd, code, out)
@@ -288,9 +288,6 @@ func TestResumeIncludesCheckpointResults(t *testing.T) {
 	}
 	if summary.Processed != 1 || summary.Restored != 1 || summary.Input.Resumed != 1 || summary.Failed != 1 || summary.RatePerSec != 0 {
 		t.Fatalf("summary=%+v", summary)
-	}
-	if code, _, _ := run([]string{"check", "--resume", checkpoint, "--working-output", filepath.Join(dir, "working.txt")}, input); code != ExitUsage {
-		t.Fatalf("resume working-output code=%d", code)
 	}
 }
 
@@ -525,15 +522,15 @@ func TestSecureWorkingOutput(t *testing.T) {
 
 func TestCommitPartialWorkingOutput(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "partial.txt")
-	output, err := openSecureOutput(path, false)
+	output, err := openWorkingFile(path, "{uri}", false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := output.WriteLine("http://user:secret@host:80"); err != nil {
+	if err := output.Write(model.Proxy{Protocol: model.ProtocolHTTP, Host: "host", Port: 80, Credentials: &model.Credentials{Username: "user", Password: "secret"}}); err != nil {
 		t.Fatal(err)
 	}
 	var diagnostics bytes.Buffer
-	if err := commitPartialWorking(output, path, 1, &diagnostics); err != nil {
+	if err := commitPartialWorking(output, path, &diagnostics); err != nil {
 		t.Fatal(err)
 	}
 	payload, err := os.ReadFile(path)

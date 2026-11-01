@@ -35,7 +35,7 @@ func TestCredentialExportIsExplicitOnly(t *testing.T) {
 	if got := p.FullURI(); !strings.Contains(got, "p%40ss") {
 		t.Fatalf("bad full URI: %s", got)
 	}
-	b, err := json.Marshal(Result{Proxy: p.SafeURI(), InputProxy: p.FullURI()})
+	b, err := json.Marshal(Result{Proxy: p.SafeURI(), Validated: &p})
 	if err != nil {
 		t.Fatal(err)
 	}

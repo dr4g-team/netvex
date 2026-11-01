@@ -1,0 +1,465 @@
+{
+  "$id": "https://github.com/drag-team/netvex/blob/main/docs/schemas/result.v6.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "attempts": {
+      "type": "integer"
+    },
+    "capabilities": {
+      "additionalProperties": true,
+      "properties": {
+        "exit_ipv4": {
+          "type": "boolean"
+        },
+        "exit_ipv6": {
+          "type": "boolean"
+        },
+        "udp_associate": {
+          "type": "string"
+        }
+      },
+      "required": [],
+      "type": "object"
+    },
+    "checked_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "endpoint": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string"
+    },
+    "label": {
+      "type": "string"
+    },
+    "observations": {
+      "items": {
+        "additionalProperties": true,
+        "properties": {
+          "anonymity": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "body_bytes": {
+            "type": "integer"
+          },
+          "body_captured_bytes": {
+            "type": "integer"
+          },
+          "body_sha256": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "destination_address_attempts": {
+            "type": "integer"
+          },
+          "destination_tls": {
+            "additionalProperties": true,
+            "properties": {
+              "alpn": {
+                "type": "string"
+              },
+              "certificate_expiry": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "cipher_suite": {
+                "type": "string"
+              },
+              "peer_certificate_sha256": {
+                "type": "string"
+              },
+              "server_name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "version",
+              "cipher_suite"
+            ],
+            "type": "object"
+          },
+          "exit_ip": {
+            "type": "string"
+          },
+          "forwarding_evidence": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "http_status": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "metadata": {
+            "additionalProperties": true,
+            "properties": {
+              "asn": {
+                "type": "string"
+              },
+              "city": {
+                "type": "string"
+              },
+              "country": {
+                "type": "string"
+              },
+              "country_code": {
+                "type": "string"
+              },
+              "network_type": {
+                "type": "string"
+              },
+              "organization": {
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "protocol": {
+            "enum": [
+              "auto",
+              "http",
+              "https",
+              "socks4",
+              "socks4a",
+              "socks5"
+            ],
+            "type": "string"
+          },
+          "proxy_authentication": {
+            "type": "string"
+          },
+          "proxy_tls": {
+            "additionalProperties": true,
+            "properties": {
+              "alpn": {
+                "type": "string"
+              },
+              "certificate_expiry": {
+                "format": "date-time",
+                "type": "string"
+              },
+              "cipher_suite": {
+                "type": "string"
+              },
+              "peer_certificate_sha256": {
+                "type": "string"
+              },
+              "server_name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "version",
+              "cipher_suite"
+            ],
+            "type": "object"
+          },
+          "resolved_ip": {
+            "type": "string"
+          },
+          "response_headers": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object"
+          },
+          "stage": {
+            "enum": [
+              "input",
+              "resolve",
+              "connect",
+              "proxy_tls",
+              "negotiate",
+              "tunnel",
+              "tls",
+              "request",
+              "response",
+              "policy",
+              "complete"
+            ],
+            "type": "string"
+          },
+          "started_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "failed",
+              "timeout",
+              "auth_failed",
+              "policy_blocked",
+              "invalid",
+              "inconclusive",
+              "unreliable",
+              "interrupted"
+            ],
+            "type": "string"
+          },
+          "target": {
+            "type": "string"
+          },
+          "throughput_kbps": {
+            "type": "number"
+          },
+          "timings": {
+            "additionalProperties": true,
+            "properties": {
+              "body_ms": {
+                "type": "number"
+              },
+              "connect_ms": {
+                "type": "number"
+              },
+              "dns_ms": {
+                "type": "number"
+              },
+              "proxy_tls_ms": {
+                "type": "number"
+              },
+              "queue_ms": {
+                "type": "number"
+              },
+              "tls_ms": {
+                "type": "number"
+              },
+              "total_ms": {
+                "type": "number"
+              },
+              "ttfb_ms": {
+                "type": "number"
+              },
+              "tunnel_ms": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "total_ms"
+            ],
+            "type": "object"
+          }
+        },
+        "required": [
+          "attempt",
+          "started_at",
+          "protocol",
+          "target",
+          "status",
+          "stage",
+          "timings"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    },
+    "protocol": {
+      "enum": [
+        "auto",
+        "http",
+        "https",
+        "socks4",
+        "socks4a",
+        "socks5"
+      ],
+      "type": "string"
+    },
+    "proxy": {
+      "type": "string"
+    },
+    "required_successes": {
+      "type": "integer"
+    },
+    "rotation": {
+      "additionalProperties": true,
+      "properties": {
+        "asns": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "change_rate": {
+          "type": "number"
+        },
+        "classification": {
+          "type": "string"
+        },
+        "countries": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "dominant_exit_ip": {
+          "type": "string"
+        },
+        "dominant_share": {
+          "type": "number"
+        },
+        "exit_changes": {
+          "type": "integer"
+        },
+        "geo_consistent": {
+          "type": "boolean"
+        },
+        "observed_samples": {
+          "type": "integer"
+        },
+        "unique_exit_ips": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "classification",
+        "observed_samples",
+        "unique_exit_ips",
+        "geo_consistent"
+      ],
+      "type": "object"
+    },
+    "schema_version": {
+      "type": "integer"
+    },
+    "score": {
+      "additionalProperties": true,
+      "properties": {
+        "confidence": {
+          "type": "string"
+        },
+        "jitter_ms": {
+          "type": "number"
+        },
+        "median_ms": {
+          "type": "number"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "success_rate": {
+          "type": "number"
+        },
+        "value": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "confidence",
+        "reason",
+        "success_rate"
+      ],
+      "type": "object"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "failed",
+        "timeout",
+        "auth_failed",
+        "policy_blocked",
+        "invalid",
+        "inconclusive",
+        "unreliable",
+        "interrupted"
+      ],
+      "type": "string"
+    },
+    "successes": {
+      "type": "integer"
+    },
+    "target_quorum": {
+      "type": "integer"
+    },
+    "target_results": {
+      "items": {
+        "additionalProperties": true,
+        "properties": {
+          "attempts": {
+            "type": "integer"
+          },
+          "last_code": {
+            "type": "string"
+          },
+          "median_ms": {
+            "type": "number"
+          },
+          "qualified": {
+            "type": "boolean"
+          },
+          "required_successes": {
+            "type": "integer"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "failed",
+              "timeout",
+              "auth_failed",
+              "policy_blocked",
+              "invalid",
+              "inconclusive",
+              "unreliable",
+              "interrupted"
+            ],
+            "type": "string"
+          },
+          "success_rate": {
+            "type": "number"
+          },
+          "successes": {
+            "type": "integer"
+          },
+          "target": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "target",
+          "status",
+          "attempts",
+          "successes",
+          "required_successes",
+          "success_rate",
+          "qualified"
+        ],
+        "type": "object"
+      },
+      "type": "array"
+    }
+  },
+  "required": [
+    "schema_version",
+    "id",
+    "proxy",
+    "endpoint",
+    "protocol",
+    "status",
+    "attempts",
+    "successes",
+    "required_successes",
+    "observations",
+    "rotation",
+    "score",
+    "checked_at"
+  ],
+  "title": "NetVex result, schema version 6",
+  "type": "object"
+}

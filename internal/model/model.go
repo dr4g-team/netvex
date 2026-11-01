@@ -297,8 +297,25 @@ type Result struct {
 	TargetQuorum      int             `json:"target_quorum,omitempty"`
 	Rotation          RotationProfile `json:"rotation"`
 	Score             Score           `json:"score"`
+	Capabilities      *Capabilities   `json:"capabilities,omitempty"`
 	CheckedAt         time.Time       `json:"checked_at"`
-	InputProxy        string          `json:"-"`
+	// Validated carries credentials and is set only for an explicit working export.
+	Validated *Proxy `json:"-"`
+}
+
+// Capabilities records what a proxy demonstrated, never what it claims.
+type Capabilities struct {
+	ExitIPv4     bool   `json:"exit_ipv4,omitempty"`
+	ExitIPv6     bool   `json:"exit_ipv6,omitempty"`
+	UDPAssociate string `json:"udp_associate,omitempty"`
+}
+
+// CanaryReport counts direct target health checks made during a run.
+type CanaryReport struct {
+	Checks       int64 `json:"checks"`
+	Failures     int64 `json:"failures"`
+	Outages      int64 `json:"outages"`
+	Reclassified int64 `json:"reclassified"`
 }
 
 type TargetResult struct {
@@ -345,6 +362,10 @@ type RunConfiguration struct {
 	AllowPrivateProxy bool     `json:"allow_private_proxies,omitempty"`
 	SkipConnectRetry  bool     `json:"skip_connect_retry,omitempty"`
 	TLSClassicalKEX   bool     `json:"tls_classical_kex,omitempty"`
+	ProbeUDP          bool     `json:"probe_udp,omitempty"`
+	ExpectCountries   []string `json:"expect_countries,omitempty"`
+	CanaryInterval    string   `json:"canary_interval,omitempty"`
+	SaveStatus        string   `json:"save_status,omitempty"`
 	Prescreen         bool     `json:"prescreen,omitempty"`
 	PrescreenWorkers  int      `json:"prescreen_concurrency,omitempty"`
 	PrescreenRetries  int      `json:"prescreen_retries,omitempty"`
@@ -402,6 +423,7 @@ type RunSummary struct {
 	FailureStages map[Stage]int            `json:"failure_stages,omitempty"`
 	Targets       map[string]TargetSummary `json:"targets,omitempty"`
 	TargetHealth  map[string]TargetHealth  `json:"target_health,omitempty"`
+	Canary        *CanaryReport            `json:"canary,omitempty"`
 	Quality       *QualityReport           `json:"quality,omitempty"`
 }
 

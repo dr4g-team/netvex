@@ -10,6 +10,8 @@ func main() {
 	ignoreBrokenPipe()
 	st, err := os.Stdout.Stat()
 	isTTY := err == nil && (st.Mode()&os.ModeCharDevice) != 0
-	c := cli.CLI{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin, IsTerminal: isTTY}
+	errorInfo, err := os.Stderr.Stat()
+	isErrorTTY := err == nil && (errorInfo.Mode()&os.ModeCharDevice) != 0
+	c := cli.CLI{Stdout: os.Stdout, Stderr: os.Stderr, Stdin: os.Stdin, IsTerminal: isTTY, ErrorTerminal: isErrorTTY}
 	os.Exit(c.Run(os.Args[1:]))
 }

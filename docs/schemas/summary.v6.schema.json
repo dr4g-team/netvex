@@ -1,0 +1,431 @@
+{
+  "$id": "https://github.com/drag-team/netvex/blob/main/docs/schemas/summary.v6.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": true,
+  "properties": {
+    "attempts": {
+      "type": "integer"
+    },
+    "canary": {
+      "additionalProperties": true,
+      "properties": {
+        "checks": {
+          "type": "integer"
+        },
+        "failures": {
+          "type": "integer"
+        },
+        "outages": {
+          "type": "integer"
+        },
+        "reclassified": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "checks",
+        "failures",
+        "outages",
+        "reclassified"
+      ],
+      "type": "object"
+    },
+    "configuration": {
+      "additionalProperties": true,
+      "properties": {
+        "allow_private_proxies": {
+          "type": "boolean"
+        },
+        "allow_remote_dns": {
+          "type": "boolean"
+        },
+        "auto_concurrency": {
+          "type": "boolean"
+        },
+        "auto_probe_timeout": {
+          "type": "string"
+        },
+        "canary_interval": {
+          "type": "string"
+        },
+        "concurrency": {
+          "type": "integer"
+        },
+        "connect_timeout": {
+          "type": "string"
+        },
+        "content_rules": {
+          "type": "integer"
+        },
+        "deduplicate": {
+          "type": "boolean"
+        },
+        "expect_countries": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "intelligence_body_bytes": {
+          "type": "integer"
+        },
+        "keep_partial": {
+          "type": "boolean"
+        },
+        "label": {
+          "type": "string"
+        },
+        "max_input_entries": {
+          "type": "integer"
+        },
+        "max_response_bytes": {
+          "type": "integer"
+        },
+        "metadata_enabled": {
+          "type": "boolean"
+        },
+        "min_response_bytes": {
+          "type": "integer"
+        },
+        "min_success_rate": {
+          "type": "number"
+        },
+        "min_throughput_kbps": {
+          "type": "number"
+        },
+        "per_target_concurrency": {
+          "type": "integer"
+        },
+        "preflight": {
+          "type": "string"
+        },
+        "prescreen": {
+          "type": "boolean"
+        },
+        "prescreen_concurrency": {
+          "type": "integer"
+        },
+        "prescreen_retries": {
+          "type": "integer"
+        },
+        "probe_udp": {
+          "type": "boolean"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "protocol": {
+          "enum": [
+            "auto",
+            "http",
+            "https",
+            "socks4",
+            "socks4a",
+            "socks5"
+          ],
+          "type": "string"
+        },
+        "proxy_dns_cache_ttl": {
+          "type": "string"
+        },
+        "queue_size": {
+          "type": "integer"
+        },
+        "repeat": {
+          "type": "integer"
+        },
+        "request_timeout": {
+          "type": "string"
+        },
+        "requests_per_second": {
+          "type": "number"
+        },
+        "retry_backoff": {
+          "type": "string"
+        },
+        "retry_permanent_failures": {
+          "type": "boolean"
+        },
+        "rotation_interval": {
+          "type": "string"
+        },
+        "rotation_samples": {
+          "type": "integer"
+        },
+        "save_status": {
+          "type": "string"
+        },
+        "scenario": {
+          "type": "string"
+        },
+        "skip_connect_retry": {
+          "type": "boolean"
+        },
+        "stop_on_success": {
+          "type": "boolean"
+        },
+        "target_matrix": {
+          "type": "boolean"
+        },
+        "target_quorum": {
+          "type": "integer"
+        },
+        "tls_classical_kex": {
+          "type": "boolean"
+        },
+        "validation_targets": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "protocol",
+        "concurrency",
+        "queue_size",
+        "per_target_concurrency",
+        "requests_per_second",
+        "repeat",
+        "min_success_rate",
+        "connect_timeout",
+        "request_timeout",
+        "auto_probe_timeout",
+        "retry_backoff",
+        "stop_on_success",
+        "retry_permanent_failures",
+        "allow_remote_dns",
+        "max_response_bytes",
+        "intelligence_body_bytes",
+        "deduplicate",
+        "max_input_entries",
+        "validation_targets"
+      ],
+      "type": "object"
+    },
+    "duration_ms": {
+      "type": "number"
+    },
+    "failed": {
+      "type": "integer"
+    },
+    "failure_codes": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "failure_stages": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "finished_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "inconclusive": {
+      "type": "integer"
+    },
+    "input": {
+      "additionalProperties": true,
+      "properties": {
+        "accepted": {
+          "type": "integer"
+        },
+        "duplicates": {
+          "type": "integer"
+        },
+        "read": {
+          "type": "integer"
+        },
+        "rejected": {
+          "type": "integer"
+        },
+        "resumed": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "read",
+        "accepted",
+        "duplicates",
+        "rejected"
+      ],
+      "type": "object"
+    },
+    "latency_p50_ms": {
+      "type": "number"
+    },
+    "latency_p95_ms": {
+      "type": "number"
+    },
+    "latency_p99_ms": {
+      "type": "number"
+    },
+    "processed": {
+      "type": "integer"
+    },
+    "quality": {
+      "additionalProperties": true,
+      "properties": {
+        "checks": {
+          "items": {
+            "additionalProperties": true,
+            "properties": {
+              "actual": {
+                "type": "number"
+              },
+              "expected": {
+                "type": "number"
+              },
+              "name": {
+                "type": "string"
+              },
+              "operator": {
+                "type": "string"
+              },
+              "passed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "name",
+              "passed",
+              "actual",
+              "operator",
+              "expected"
+            ],
+            "type": "object"
+          },
+          "type": "array"
+        },
+        "passed": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "passed",
+        "checks"
+      ],
+      "type": "object"
+    },
+    "rate_per_sec": {
+      "type": "number"
+    },
+    "restored": {
+      "type": "integer"
+    },
+    "run_id": {
+      "type": "string"
+    },
+    "schema_version": {
+      "type": "integer"
+    },
+    "started_at": {
+      "format": "date-time",
+      "type": "string"
+    },
+    "status_count": {
+      "additionalProperties": {
+        "type": "integer"
+      },
+      "type": "object"
+    },
+    "successful": {
+      "type": "integer"
+    },
+    "target_health": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "http_status": {
+            "type": "integer"
+          },
+          "latency_ms": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "targets": {
+      "additionalProperties": {
+        "additionalProperties": true,
+        "properties": {
+          "attempts": {
+            "type": "integer"
+          },
+          "average_total_ms": {
+            "type": "number"
+          },
+          "failed": {
+            "type": "integer"
+          },
+          "inconclusive": {
+            "type": "integer"
+          },
+          "success_rate": {
+            "type": "number"
+          },
+          "successful": {
+            "type": "integer"
+          },
+          "timeouts": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "attempts",
+          "successful",
+          "failed",
+          "inconclusive",
+          "timeouts",
+          "success_rate"
+        ],
+        "type": "object"
+      },
+      "type": "object"
+    },
+    "timeouts": {
+      "type": "integer"
+    },
+    "unreliable": {
+      "type": "integer"
+    }
+  },
+  "required": [
+    "schema_version",
+    "configuration",
+    "run_id",
+    "started_at",
+    "finished_at",
+    "input",
+    "processed",
+    "attempts",
+    "successful",
+    "failed",
+    "inconclusive",
+    "unreliable",
+    "timeouts",
+    "duration_ms",
+    "rate_per_sec",
+    "status_count"
+  ],
+  "title": "NetVex summary, schema version 6",
+  "type": "object"
+}

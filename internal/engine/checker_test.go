@@ -150,17 +150,17 @@ func TestCredentialBearingInputProxyIsExplicit(t *testing.T) {
 		})
 		return c.Check(context.Background(), proxy)
 	}
-	if result := check(false); result.InputProxy != "" {
-		t.Fatalf("credential URI retained without export: %q", result.InputProxy)
+	if result := check(false); result.Validated != nil {
+		t.Fatalf("credentials retained without export: %v", result.Validated.SafeURI())
 	}
-	if result := check(true); !strings.Contains(result.InputProxy, "user:s%25cret@proxy.test:8080") {
-		t.Fatalf("credential URI missing for explicit export: %q", result.InputProxy)
+	if result := check(true); result.Validated == nil || !strings.Contains(result.Validated.FullURI(), "user:s%25cret@proxy.test:8080") {
+		t.Fatalf("credentials missing for explicit export: %+v", result.Validated)
 	}
 	failed := baseChecker("http://target.test/")
 	failed.IncludeInputProxy = true
 	failed.Connector.DialContext = func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("offline") }
-	if result := failed.Check(context.Background(), proxy); result.InputProxy != "" {
-		t.Fatalf("failed proxy retained credential URI: %q", result.InputProxy)
+	if result := failed.Check(context.Background(), proxy); result.Validated != nil {
+		t.Fatalf("failed proxy retained credentials: %v", result.Validated.SafeURI())
 	}
 }
 
@@ -1289,5 +1289,133 @@ func TestOversizedRemoteDiagnosticIsBounded(t *testing.T) {
 	observation := finishError(model.Observation{}, time.Now(), &protocol.Error{Code: "x", Detail: strings.Repeat("y", 8192)})
 	if len(observation.Message) > model.MaxMessageBytes {
 		t.Fatalf("message has %d bytes", len(observation.Message))
+	}
+}
+
+func TestCanaryPausesAndWithholdsJudgmentDuringOutage(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.Repeat = 1
+	c.Config.CanaryInterval = time.Hour
+	var healthy atomic.Bool
+	c.canaryProbe = func(context.Context, string) model.TargetHealth {
+		if healthy.Load() {
+			return model.TargetHealth{Status: "ok"}
+		}
+		return model.TargetHealth{Status: "failed"}
+	}
+	c.Config.CanaryInterval = 20 * time.Millisecond
+	c.probeTargets(context.Background())
+	if !c.targetDown("http://target.test/") {
+		t.Fatal("outage not detected")
+	}
+	failing := func(context.Context, string, string) (net.Conn, error) { return nil, syscall.ECONNREFUSED }
+	c.Connector.DialContext = failing
+	started := time.Now()
+	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	if elapsed := time.Since(started); elapsed < 50*time.Millisecond {
+		t.Fatalf("worker did not pause: %s", elapsed)
+	}
+	if result.Status != model.StatusInconclusive || result.Observations[0].Code != "target_unhealthy" {
+		t.Fatalf("result=%+v", result)
+	}
+	report := c.CanaryReport()
+	if report.Outages != 1 || report.Reclassified != 1 || report.Failures != 1 || report.Checks != 2 {
+		t.Fatalf("report=%+v", report)
+	}
+	healthy.Store(true)
+	c.probeTargets(context.Background())
+	if c.targetDown("http://target.test/") {
+		t.Fatal("recovery not detected")
+	}
+	if result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080}); result.Status != model.StatusFailed {
+		t.Fatalf("healthy target must not reclassify: %+v", result)
+	}
+}
+
+func TestCanaryIgnoresSingleFailureAndKeepsAuthResults(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.CanaryInterval = 5 * time.Millisecond
+	var calls atomic.Int64
+	c.canaryProbe = func(context.Context, string) model.TargetHealth {
+		if calls.Add(1) == 1 {
+			return model.TargetHealth{Status: "failed"}
+		}
+		return model.TargetHealth{Status: "ok"}
+	}
+	c.probeTargets(context.Background())
+	if c.targetDown("http://target.test/") {
+		t.Fatal("one failed probe paused the run")
+	}
+	down := map[string]struct{}{"http://target.test/": {}}
+	c.canaryDown.Store(&down)
+	observation := model.Observation{Status: model.StatusAuthFailed, Code: "proxy_auth_rejected"}
+	c.reclassifyDuringOutage(&observation, "http://target.test/")
+	if observation.Status != model.StatusAuthFailed {
+		t.Fatalf("authentication verdict changed: %+v", observation)
+	}
+}
+
+func TestRunCanaryStopsWithContext(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.CanaryInterval = 5 * time.Millisecond
+	c.canaryProbe = func(context.Context, string) model.TargetHealth { return model.TargetHealth{Status: "ok"} }
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		c.RunCanary(ctx)
+		close(done)
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("canary did not stop")
+	}
+	if c.CanaryReport().Checks == 0 {
+		t.Fatal("canary never ran")
+	}
+	idle := baseChecker("http://target.test/")
+	if idle.CanaryReport() != nil {
+		t.Fatal("disabled canary produced a report")
+	}
+}
+
+func TestExpectCountryRejectsOtherExits(t *testing.T) {
+	newChecker := func(countries ...string) *Checker {
+		c := baseChecker("http://target.test/")
+		c.Config.Repeat = 1
+		c.Metadata = fixedMetadata{}
+		c.expectCountries = map[string]struct{}{}
+		for _, country := range countries {
+			c.expectCountries[country] = struct{}{}
+		}
+		c.Connector.DialContext = pipeDial(func(conn net.Conn) {
+			reader := bufio.NewReader(conn)
+			_, _ = http.ReadRequest(reader)
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+			_, _ = http.ReadRequest(reader)
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 16\r\n\r\n{\"ip\":\"8.8.8.8\"}")
+		})
+		return c
+	}
+	proxy := model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080}
+	expected, _ := fixedMetadata{}.Lookup("8.8.8.8")
+	if result := newChecker(expected.CountryCode).Check(context.Background(), proxy); result.Status != model.StatusOK {
+		t.Fatalf("result=%+v", result)
+	}
+	result := newChecker("ZZ").Check(context.Background(), proxy)
+	if result.Status != model.StatusFailed || result.Observations[0].Code != "country_mismatch" {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestExitFamilyCapabilities(t *testing.T) {
+	capabilities := observedCapabilities([]model.Observation{{ExitIP: "203.0.113.9"}, {ExitIP: "2001:db8::1"}, {ExitIP: ""}})
+	if capabilities == nil || !capabilities.ExitIPv4 || !capabilities.ExitIPv6 {
+		t.Fatalf("capabilities=%+v", capabilities)
+	}
+	if observedCapabilities([]model.Observation{{}}) != nil {
+		t.Fatal("no evidence must mean no capabilities")
 	}
 }

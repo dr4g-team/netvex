@@ -35,6 +35,7 @@ import (
 	"github.com/drag-team/netvex/internal/output"
 	qualitypkg "github.com/drag-team/netvex/internal/quality"
 	"github.com/drag-team/netvex/internal/scenario"
+	schemapkg "github.com/drag-team/netvex/internal/schema"
 	"github.com/drag-team/netvex/internal/store"
 )
 
@@ -51,6 +52,9 @@ type CLI struct {
 	Stdout, Stderr io.Writer
 	Stdin          io.Reader
 	IsTerminal     bool
+	// ErrorTerminal enables the live progress line, which writes to stderr so that
+	// redirecting stdout to a file still shows progress.
+	ErrorTerminal bool
 }
 
 func (c CLI) Run(args []string) int {
@@ -85,6 +89,8 @@ func (c CLI) Run(args []string) int {
 		return c.shard(args[1:])
 	case "merge":
 		return c.merge(args[1:])
+	case "diff":
+		return c.diff(args[1:])
 	case "explore":
 		return c.explore(args[1:])
 	case "config":
@@ -97,10 +103,26 @@ func (c CLI) Run(args []string) int {
 		return c.completion(args[1:])
 	case "capabilities":
 		return c.capabilities(args[1:])
+	case "schema":
+		return c.schemaCmd(args[1:])
 	default:
 		fmt.Fprintf(c.Stderr, "netvex: unknown command %q; run 'netvex help'\n", args[0])
 		return ExitUsage
 	}
+}
+
+func (c CLI) schemaCmd(args []string) int {
+	if len(args) != 1 {
+		fmt.Fprintln(c.Stderr, "usage: netvex schema result|summary")
+		return ExitUsage
+	}
+	document, err := schemapkg.Generate(args[0])
+	if err != nil {
+		fmt.Fprintln(c.Stderr, err)
+		return ExitUsage
+	}
+	fmt.Fprintln(c.Stdout, string(document))
+	return ExitOK
 }
 
 func (c CLI) help() int {
@@ -120,11 +142,13 @@ Commands:
   pool       analyze exit, subnet, ASN, and country diversity
   shard      split normalized proxy datasets reproducibly
   merge      merge and deduplicate result runs
+  diff       show what changed between two saved runs
   explore    interactively browse a saved run
   config     show, validate, or initialize configuration
   doctor     diagnose the local runtime and optional network resolution
   bench      run a controlled scheduler benchmark
   capabilities show machine-readable protocols, formats, and safeguards
+  schema     print the JSON Schema for results or summaries
   completion generate shell completion for bash, zsh, or fish
   version    show build information
 
@@ -160,7 +184,7 @@ func currentCapabilities() capabilityDocument {
 		InputCompression: []string{"gzip", "bzip2"},
 		OutputFormats:    []string{"table", "json", "jsonl", "csv", "txt"},
 		Reports:          []string{"summary_json", "prometheus_textfile", "junit_xml"},
-		Safeguards:       []string{"bounded_concurrency", "bounded_input", "bounded_response", "credential_redaction", "destination_allowlist", "dns_pinning", "safe_redirects", "tls_verification"},
+		Safeguards:       []string{"bounded_concurrency", "bounded_input", "bounded_response", "credential_redaction", "destination_allowlist", "dns_pinning", "private_gateway_block", "safe_redirects", "tls_verification"},
 		Platforms:        []string{"linux", "darwin", "windows", "freebsd", "openbsd", "netbsd", "dragonfly", "illumos", "solaris", "aix"},
 	}
 }
@@ -210,7 +234,11 @@ type checkOptions struct {
 	allowPrivateProxies, prescreen, noConnectRetry              bool
 	tlsClassicalKEX                                             bool
 	prescreenWorkers, prescreenRetries                          int
-	prescreenTimeout                                            string
+	prescreenTimeout, canaryInterval                            string
+	workingDir, workingTemplate, saveStatus                     string
+	cpuProfile, memProfile                                      string
+	noProgress, resumeAnyConfig, probeUDP                       bool
+	expectCountries                                             stringsFlag
 	dataDir                                                     string
 	maxRedirects                                                int
 	requireCount                                                int
@@ -336,6 +364,16 @@ func (c CLI) addCheckFlags(fs *flag.FlagSet, o *checkOptions) {
 	fs.BoolVar(&o.quiet, "quiet", false, "suppress per-proxy stdout; summaries and errors remain on stderr")
 	fs.StringVar(&o.outputStatus, "output-status", "all", "stdout results: all, ok, failed, timeout, auth_failed, policy_blocked, invalid, inconclusive, unreliable, interrupted")
 	fs.StringVar(&o.workingOutput, "working-output", "", "write validated proxies with credentials to a mode-0600 file")
+	fs.StringVar(&o.workingDir, "working-dir", "", "write validated proxies to one mode-0600 file per protocol in this directory")
+	fs.StringVar(&o.workingTemplate, "working-template", "", "working line format: uri, hostport, colon, or a template using {protocol} {user} {pass} {host} {port} {hostport} {uri}")
+	fs.StringVar(&o.saveStatus, "save-status", "", "comma-separated statuses persisted by --save; default all")
+	fs.StringVar(&o.cpuProfile, "cpu-profile", "", "write a pprof CPU profile of this run")
+	fs.StringVar(&o.memProfile, "mem-profile", "", "write a pprof allocation profile when this run ends")
+	fs.BoolVar(&o.noProgress, "no-progress", false, "disable the live progress line on terminals")
+	fs.BoolVar(&o.resumeAnyConfig, "resume-any-config", false, "resume even if the checkpoint used different validation rules")
+	fs.BoolVar(&o.probeUDP, "probe-udp", false, "ask working SOCKS5 proxies for UDP ASSOCIATE (control channel only)")
+	fs.Var(&o.expectCountries, "expect-country", "required exit country code from the metadata file (repeatable)")
+	fs.StringVar(&o.canaryInterval, "canary-interval", "", "check targets directly at this interval during the run; 0 disables")
 	fs.BoolVar(&o.keepPartial, "keep-partial", false, "atomically publish validated working output when interrupted")
 	fs.StringVar(&o.summaryOutput, "summary-output", "", "atomically write the run summary as JSON")
 	fs.StringVar(&o.metricsOutput, "metrics-output", "", "atomically write aggregate Prometheus textfile metrics")
@@ -501,6 +539,15 @@ func (c CLI) loadCheck(o checkOptions) (config.Config, model.Protocol, output.Fo
 	if o.allowPrivateProxies || o.explicit["allow-private-proxies"] {
 		cfg.AllowPrivateProxy = o.allowPrivateProxies
 	}
+	if o.probeUDP || o.explicit["probe-udp"] {
+		cfg.ProbeUDP = o.probeUDP
+	}
+	if len(o.expectCountries) > 0 {
+		cfg.ExpectCountries = []string(o.expectCountries)
+	}
+	if o.canaryInterval != "" {
+		cfg.CanaryRaw = o.canaryInterval
+	}
 	if o.prescreen || o.explicit["prescreen"] {
 		cfg.Prescreen = o.prescreen
 	}
@@ -659,12 +706,31 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		fmt.Fprintln(c.Stderr, "checkpoint and resume are mutually exclusive")
 		return ExitUsage
 	}
-	if o.resumeCheckpoint != "" && o.workingOutput != "" {
-		fmt.Fprintln(c.Stderr, "working-output cannot reconstruct credentials from a redacted resume checkpoint")
+	if o.workingOutput != "" && o.workingDir != "" {
+		fmt.Fprintln(c.Stderr, "working-output and working-dir are mutually exclusive")
 		return ExitUsage
 	}
-	if o.keepPartial && o.workingOutput == "" {
-		fmt.Fprintln(c.Stderr, "keep-partial requires working-output")
+	exportWorking := o.workingOutput != "" || o.workingDir != ""
+	if o.keepPartial && !exportWorking {
+		fmt.Fprintln(c.Stderr, "keep-partial requires working-output or working-dir")
+		return ExitUsage
+	}
+	if o.workingTemplate != "" && !exportWorking {
+		fmt.Fprintln(c.Stderr, "working-template requires working-output or working-dir")
+		return ExitUsage
+	}
+	workingTemplate, templateErr := parseWorkingTemplate(o.workingTemplate)
+	if templateErr != nil {
+		fmt.Fprintln(c.Stderr, templateErr)
+		return ExitUsage
+	}
+	if o.saveStatus != "" && !o.save {
+		fmt.Fprintln(c.Stderr, "save-status requires save")
+		return ExitUsage
+	}
+	saveStatuses, saveErr := parseStatusList(o.saveStatus)
+	if saveErr != nil {
+		fmt.Fprintln(c.Stderr, saveErr)
 		return ExitUsage
 	}
 	if o.metricsOutput == "-" {
@@ -689,6 +755,16 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		fmt.Fprintln(c.Stderr, "configuration error:", err)
 		return ExitUsage
 	}
+	stopProfiles, profileErr := startProfiles(o.cpuProfile, o.memProfile, o.forceWorking)
+	if profileErr != nil {
+		fmt.Fprintln(c.Stderr, profileErr)
+		return ExitOperational
+	}
+	defer func() {
+		if err := stopProfiles(); err != nil {
+			fmt.Fprintln(c.Stderr, err)
+		}
+	}()
 	if o.label == "" && cfg.ScenarioName != "" {
 		o.label = cfg.ScenarioName
 	}
@@ -717,7 +793,7 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 	checker.IdentityKey = identityKey
 	checker.Metadata = metadataProvider
 	checker.Label = o.label
-	checker.IncludeInputProxy = o.workingOutput != ""
+	checker.IncludeInputProxy = exportWorking
 	if err := checker.ConfigureCABundles(cfg.CABundle, cfg.ProxyCABundle); err != nil {
 		fmt.Fprintln(c.Stderr, "TLS configuration error:", err)
 		return ExitUsage
@@ -807,7 +883,7 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 			}
 		}
 	}
-	var working *secureOutput
+	var working *workingSink
 	var summaryOutput *secureOutput
 	var metricsOutput *secureOutput
 	var junitOutput *secureOutput
@@ -832,12 +908,25 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		}
 	}
 	if checkpointPath != "" {
+		fingerprint := checkpointFingerprint(cfg, proto)
+		if resumeCheckpoint && !o.resumeAnyConfig {
+			if err := verifyCheckpointFingerprint(checkpointPath, fingerprint, c.Stderr); err != nil {
+				fmt.Fprintln(c.Stderr, "checkpoint error:", err)
+				return ExitUsage
+			}
+		}
 		checkpoint, completed, err = store.OpenCheckpoint(checkpointPath, resumeCheckpoint, o.forceWorking, o.checkpointSync, cfg.MaxInputEntries)
 		if err != nil {
 			fmt.Fprintln(c.Stderr, "checkpoint error:", err)
 			return ExitOperational
 		}
 		defer checkpoint.Close()
+		if !resumeCheckpoint {
+			if err := writeCheckpointFingerprint(checkpointPath, fingerprint); err != nil {
+				fmt.Fprintln(c.Stderr, "checkpoint error:", err)
+				return ExitOperational
+			}
+		}
 	}
 	if o.workingOutput != "" {
 		for _, name := range files {
@@ -854,7 +943,31 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 				return ExitUsage
 			}
 		}
-		working, err = openSecureOutput(o.workingOutput, o.forceWorking)
+		working, err = openWorkingFile(o.workingOutput, workingTemplate, o.forceWorking)
+		if err != nil {
+			fmt.Fprintln(c.Stderr, "working output error:", err)
+			return ExitOperational
+		}
+		defer working.Abort()
+	}
+	if o.workingDir != "" {
+		for _, name := range files {
+			if name == "-" {
+				continue
+			}
+			for _, path := range workingDirPaths(o.workingDir) {
+				same, sameErr := samePath(name, path)
+				if sameErr != nil {
+					fmt.Fprintln(c.Stderr, "working output error:", sameErr)
+					return ExitUsage
+				}
+				if same {
+					fmt.Fprintln(c.Stderr, "working output must not overwrite an input file")
+					return ExitUsage
+				}
+			}
+		}
+		working, err = openWorkingDir(o.workingDir, workingTemplate, o.forceWorking)
 		if err != nil {
 			fmt.Fprintln(c.Stderr, "working output error:", err)
 			return ExitOperational
@@ -944,8 +1057,15 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		parser := inputpkg.New(inputpkg.Options{Format: format, DefaultProtocol: proto, Source: "input", MaxBytes: cfg.MaxInputBytes, MaxEntries: cfg.MaxInputEntries, Deduplicate: !o.noDeduplicate})
 		warnedCredentialFiles := map[string]struct{}{}
 		emit := func(p model.Proxy) error {
-			if _, done := completed[p.ResultID(identityKey)]; done {
+			if entry, done := completed[p.ResultID(identityKey)]; done {
 				resumed.Add(1)
+				if working != nil && entry.Status == model.StatusOK {
+					// Checkpoints are redacted, so credentials for an already validated
+					// proxy can only come from this re-read of the input.
+					restored := p
+					restored.Protocol = entry.Protocol
+					return working.Write(restored)
+				}
 				return nil
 			}
 			if p.Credentials != nil && p.Source != "stdin" {
@@ -1007,6 +1127,11 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		}
 		validationInput, unreachable = checker.Prescreen(ctx, jobs, workers, cfg.QueueSize)
 	}
+	if cfg.CanaryInterval > 0 {
+		canaryCtx, stopCanary := context.WithCancel(ctx)
+		defer stopCanary()
+		go checker.RunCanary(canaryCtx)
+	}
 	results := runner.Run(ctx, validationInput)
 	if unreachable != nil {
 		results = engine.Merge(results, unreachable, cfg.QueueSize)
@@ -1043,7 +1168,7 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 				return fmt.Errorf("output: %w", err)
 			}
 		}
-		if history != nil {
+		if history != nil && (len(saveStatuses) == 0 || saveStatuses[r.Status]) {
 			if err := history.Write(r); err != nil {
 				return fmt.Errorf("history: %w", err)
 			}
@@ -1053,8 +1178,8 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		switch r.Status {
 		case model.StatusOK:
 			summary.Successful++
-			if working != nil {
-				if err := working.WriteLine(r.InputProxy); err != nil {
+			if working != nil && r.Validated != nil {
+				if err := working.Write(*r.Validated); err != nil {
 					return fmt.Errorf("working output: %w", err)
 				}
 			}
@@ -1103,9 +1228,9 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		summary.Restored = summary.Processed
 	}
 	var progressC <-chan time.Time
-	var progressTicker *time.Ticker
-	if o.verbose {
-		progressTicker = time.NewTicker(cfg.ProgressInterval)
+	liveProgress := !o.verbose && !o.noProgress && c.ErrorTerminal
+	if o.verbose || liveProgress {
+		progressTicker := time.NewTicker(cfg.ProgressInterval)
 		progressC = progressTicker.C
 		defer progressTicker.Stop()
 	}
@@ -1113,6 +1238,10 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		select {
 		case <-progressC:
 			processedNew := summary.Processed - summary.Restored
+			if liveProgress {
+				fmt.Fprint(c.Stderr, clearLine, progressLine(progressState{processed: int64(processedNew), scheduled: scheduled.Load(), ingestDone: parserFinished.Load(), ok: summary.Successful, failed: summary.Failed, elapsed: time.Since(start)}))
+				continue
+			}
 			pending := scheduled.Load() - int64(processedNew)
 			if pending < 0 {
 				pending = 0
@@ -1137,6 +1266,9 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 			}
 		}
 	}
+	if liveProgress {
+		fmt.Fprint(c.Stderr, clearLine)
+	}
 	if writer != nil {
 		if err := writer.Flush(); err != nil {
 			fmt.Fprintln(c.Stderr, "output error:", err)
@@ -1160,8 +1292,8 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		}
 	}
 	if ctx.Err() != nil {
-		if o.keepPartial && working != nil && summary.Successful > 0 {
-			if err := commitPartialWorking(working, o.workingOutput, summary.Successful, c.Stderr); err != nil {
+		if o.keepPartial {
+			if err := commitPartialWorking(working, o.workingOutput+o.workingDir, c.Stderr); err != nil {
 				fmt.Fprintln(c.Stderr, "partial working output error:", err)
 				return ExitOperational
 			}
@@ -1170,6 +1302,7 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 	}
 	if summary.Input.Accepted == 0 {
 		if checkpointPath != "" && !resumeCheckpoint && !checkpointExisted {
+			_ = os.Remove(checkpointPath + checkpointConfigSuffix)
 			if removeErr := os.Remove(checkpointPath); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 				fmt.Fprintln(c.Stderr, "checkpoint cleanup error:", removeErr)
 				return ExitOperational
@@ -1178,6 +1311,7 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 		return ExitNoValidInput
 	}
 	summary.FinishedAt = time.Now().UTC()
+	summary.Canary = checker.CanaryReport()
 	summary.LatencyP50MS = latencies.Percentile(.50)
 	summary.LatencyP95MS = latencies.Percentile(.95)
 	summary.LatencyP99MS = latencies.Percentile(.99)
@@ -1248,7 +1382,10 @@ func (c CLI) check(args []string, forceDetailed bool) int {
 			fmt.Fprintln(c.Stderr, "working output error:", err)
 			return ExitOperational
 		}
-		fmt.Fprintf(c.Stderr, "saved %d validated proxies to %q\n", summary.Successful, o.workingOutput)
+		fmt.Fprintf(c.Stderr, "saved %d validated proxies to %q\n", working.Count(), o.workingOutput+o.workingDir)
+		if missing := summary.Successful - working.Count(); missing > 0 {
+			fmt.Fprintf(c.Stderr, "warning: %d validated proxies in the checkpoint were not in this input, so their credentials could not be exported\n", missing)
+		}
 	}
 	if junitOutput != nil {
 		payload, junitErr := qualitypkg.JUnit(summary)
@@ -1293,17 +1430,6 @@ func (c CLI) identityKey(dataDir string) func() []byte {
 	})
 }
 
-func commitPartialWorking(output *secureOutput, path string, successful int, diagnostics io.Writer) error {
-	if output == nil || successful < 1 {
-		return nil
-	}
-	if err := output.Commit(); err != nil {
-		return err
-	}
-	_, _ = fmt.Fprintf(diagnostics, "saved %d validated proxies from interrupted run to %q\n", successful, path)
-	return nil
-}
-
 func runConfiguration(cfg config.Config, proto model.Protocol, o checkOptions) model.RunConfiguration {
 	targets := make([]string, 0, len(cfg.Targets))
 	for _, raw := range cfg.Targets {
@@ -1323,6 +1449,7 @@ func runConfiguration(cfg config.Config, proto model.Protocol, o checkOptions) m
 		Repeat: cfg.Repeat, MinSuccessRate: cfg.MinSuccessRate, ConnectTimeout: cfg.ConnectTimeout.String(), RequestTimeout: cfg.RequestTimeout.String(), AutoProbeTimeout: cfg.AutoProbeTimeout.String(),
 		RetryBackoff: cfg.RetryBackoff.String(), StopOnSuccess: cfg.StopOnSuccess,
 		RetryPermanent: cfg.RetryPermanent, AllowRemoteDNS: cfg.AllowRemoteDNS, AllowPrivateProxy: cfg.AllowPrivateProxy,
+		ProbeUDP: cfg.ProbeUDP, ExpectCountries: cfg.ExpectCountries, CanaryInterval: canaryInterval(cfg), SaveStatus: o.saveStatus,
 		SkipConnectRetry: cfg.SkipConnectRetry, TLSClassicalKEX: cfg.TLSClassicalKEX, Prescreen: cfg.Prescreen, PrescreenWorkers: prescreenWorkers(cfg), PrescreenRetries: cfg.PrescreenRetries, ProxyDNSCacheTTL: cfg.ProxyDNSCacheTTL.String(),
 		MaxResponseBytes: cfg.MaxResponseBytes, IntelligenceBytes: min(cfg.IntelligenceBytes, cfg.MaxResponseBytes), MinResponseBytes: cfg.MinResponseBytes, MinThroughput: cfg.MinThroughputKBPS,
 		ContentRules:    len(cfg.RequireText) + len(cfg.RejectText) + len(cfg.ExpectJSON),
@@ -1333,6 +1460,30 @@ func runConfiguration(cfg config.Config, proto model.Protocol, o checkOptions) m
 		KeepPartial: o.keepPartial, Scenario: cfg.ScenarioName, Label: o.label,
 		Deduplicate: !o.noDeduplicate, MaxInputEntries: cfg.MaxInputEntries, ValidationTarget: targets,
 	}
+}
+
+func canaryInterval(cfg config.Config) string {
+	if cfg.CanaryInterval > 0 {
+		return cfg.CanaryInterval.String()
+	}
+	return ""
+}
+
+func parseStatusList(value string) (map[model.Status]bool, error) {
+	statuses := map[model.Status]bool{}
+	if value == "" {
+		return statuses, nil
+	}
+	for _, name := range strings.Split(value, ",") {
+		status := model.Status(strings.TrimSpace(name))
+		switch status {
+		case model.StatusOK, model.StatusFailed, model.StatusTimeout, model.StatusAuthFailed, model.StatusPolicyBlock, model.StatusInvalid, model.StatusInconclusive, model.StatusUnreliable, model.StatusInterrupted:
+			statuses[status] = true
+		default:
+			return nil, fmt.Errorf("unknown status %q", name)
+		}
+	}
+	return statuses, nil
 }
 
 func prescreenWorkers(cfg config.Config) int {
@@ -2374,7 +2525,7 @@ func (c CLI) completion(args []string) int {
 		fmt.Fprintln(c.Stderr, "usage: netvex completion bash|zsh|fish")
 		return ExitUsage
 	}
-	commands := "check inspect import results runs export stats history pool shard merge explore config doctor bench capabilities completion version help"
+	commands := "check inspect import results runs export stats history pool shard merge diff explore config doctor bench capabilities schema completion version help"
 	fs, _ := c.newFlagSet("completion-check")
 	var options checkOptions
 	c.addCheckFlags(fs, &options)
