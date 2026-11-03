@@ -6,6 +6,8 @@ All notable changes to NetVex are documented in this file. The project follows
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-03
+
 ### Changed
 
 - CI, native portability, CodeQL, scheduled fuzzing, and release publication
@@ -80,5 +82,6 @@ All notable changes to NetVex are documented in this file. The project follows
 - TLS verification remains enabled for proxy and destination connections;
   optional certificate pins detect interception by otherwise trusted roots.
 
-[Unreleased]: https://github.com/drag-team/netvex-go/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/drag-team/netvex-go/compare/v1.0.1...HEAD
+[1.0.1]: https://github.com/drag-team/netvex-go/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/drag-team/netvex-go/releases/tag/v1.0.0

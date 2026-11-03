@@ -13,7 +13,7 @@ human or machine output.
 Build metadata is derived from the source commit, and
 `make reproducibility-check` verifies byte-identical binaries for a fixed tree.
 
-The stable line is `1.0.0`, and result schema version 7 is current. The source,
+The stable line is `1.0.1`, and result schema version 7 is current. The source,
 release metadata, and documented command surface are aligned for the v1 release.
 It is not represented as a completed independent security audit.
 
