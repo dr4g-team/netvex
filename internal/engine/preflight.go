@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/dr4g-team/netvex/internal/buildinfo"
-	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/drag-team/netvex-go/internal/buildinfo"
+	"github.com/drag-team/netvex-go/internal/model"
 )
 
 func (c *Checker) Preflight(ctx context.Context) map[string]model.TargetHealth {

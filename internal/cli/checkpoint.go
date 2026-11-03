@@ -10,8 +10,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/dr4g-team/netvex/internal/config"
-	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/drag-team/netvex-go/internal/config"
+	"github.com/drag-team/netvex-go/internal/model"
 )
 
 const checkpointConfigSuffix = ".config"

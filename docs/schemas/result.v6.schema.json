@@ -1,5 +1,5 @@
 {
-  "$id": "https://github.com/dr4g-team/netvex/blob/main/docs/schemas/result.v6.schema.json",
+  "$id": "https://github.com/drag-team/netvex-go/blob/main/docs/schemas/result.v6.schema.json",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "additionalProperties": true,
   "properties": {

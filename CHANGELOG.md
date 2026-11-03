@@ -11,9 +11,10 @@ All notable changes to NetVex are documented in this file. The project follows
 - CI, native portability, CodeQL, scheduled fuzzing, and release publication
   now share one event-aware GitHub Actions workflow instead of four independent
   definitions.
-- The repository moved to the `dr4g-team` organization. The Go module path is
-  now `github.com/dr4g-team/netvex`, and schema `$id`s, build metadata, and
-  documentation links follow it.
+- The repository moved to `drag-team/netvex-go`. The Go module path is now
+  `github.com/drag-team/netvex-go`, and schema `$id`s, build metadata, and
+  documentation links follow it. Old repository URLs redirect to the new
+  location.
 
 ### Fixed
 
@@ -79,5 +80,5 @@ All notable changes to NetVex are documented in this file. The project follows
 - TLS verification remains enabled for proxy and destination connections;
   optional certificate pins detect interception by otherwise trusted roots.
 
-[Unreleased]: https://github.com/dr4g-team/netvex/compare/v1.0.0...HEAD
-[1.0.0]: https://github.com/dr4g-team/netvex/releases/tag/v1.0.0
+[Unreleased]: https://github.com/drag-team/netvex-go/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/drag-team/netvex-go/releases/tag/v1.0.0

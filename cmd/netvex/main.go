@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/dr4g-team/netvex/internal/cli"
+	"github.com/drag-team/netvex-go/internal/cli"
 )
 
 func main() {

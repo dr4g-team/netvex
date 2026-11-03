@@ -5,7 +5,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/drag-team/netvex-go/internal/model"
 )
 
 // WritePrometheusSummary writes one bounded, aggregate-only snapshot suitable

@@ -4,7 +4,7 @@ import (
 	"math"
 	"sort"
 
-	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/drag-team/netvex-go/internal/model"
 )
 
 func Calculate(obs []model.Observation) model.Score {

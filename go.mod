@@ -1,4 +1,4 @@
-module github.com/dr4g-team/netvex
+module github.com/drag-team/netvex-go
 
 go 1.26.0
 

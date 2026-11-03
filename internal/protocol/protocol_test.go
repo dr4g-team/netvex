@@ -25,8 +25,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dr4g-team/netvex/internal/model"
-	"github.com/dr4g-team/netvex/internal/policy"
+	"github.com/drag-team/netvex-go/internal/model"
+	"github.com/drag-team/netvex-go/internal/policy"
 )
 
 type memoryConn struct{ *bytes.Reader }

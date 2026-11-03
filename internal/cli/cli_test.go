@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dr4g-team/netvex/internal/config"
-	"github.com/dr4g-team/netvex/internal/model"
-	"github.com/dr4g-team/netvex/internal/store"
+	"github.com/drag-team/netvex-go/internal/config"
+	"github.com/drag-team/netvex-go/internal/model"
+	"github.com/drag-team/netvex-go/internal/store"
 )
 
 // TestMain keeps tests away from the developer's real data directory.

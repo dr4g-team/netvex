@@ -12,11 +12,11 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/dr4g-team/netvex/internal/config"
-	inputpkg "github.com/dr4g-team/netvex/internal/input"
-	"github.com/dr4g-team/netvex/internal/model"
-	"github.com/dr4g-team/netvex/internal/output"
-	"github.com/dr4g-team/netvex/internal/store"
+	"github.com/drag-team/netvex-go/internal/config"
+	inputpkg "github.com/drag-team/netvex-go/internal/input"
+	"github.com/drag-team/netvex-go/internal/model"
+	"github.com/drag-team/netvex-go/internal/output"
+	"github.com/drag-team/netvex-go/internal/store"
 )
 
 func (c CLI) shard(args []string) int {

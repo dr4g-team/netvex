@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/drag-team/netvex-go/internal/model"
 )
 
 func TestDigestMatchesRFC7616Vectors(t *testing.T) {

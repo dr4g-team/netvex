@@ -59,7 +59,7 @@ tar -xzf "netvex-v${version}-linux-amd64.tar.gz"
 ./"netvex-v${version}-linux-amd64"/netvex doctor
 ```
 
-Verify build provenance with `gh attestation verify netvex-v${version}-linux-amd64.tar.gz --repo dr4g-team/netvex`.
+Verify build provenance with `gh attestation verify netvex-v${version}-linux-amd64.tar.gz --repo drag-team/netvex-go`.
 
 Confirm the embedded version, commit, target OS and architecture, license,
 README, and changelog. Verify every native architecture available to the

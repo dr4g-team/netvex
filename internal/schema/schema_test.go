@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/drag-team/netvex-go/internal/model"
 )
 
 // publishedSchemas fails when docs/schemas falls behind the model. Regenerate with:

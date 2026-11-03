@@ -10,7 +10,7 @@ development versions use `X.Y.Z-dev` on the default branch.
 | [`VERSION`](../VERSION) | Version used by local Makefile builds |
 | [`CHANGELOG.md`](../CHANGELOG.md) | Human-readable changes in each version |
 | Git tag `vX.Y.Z` | Immutable source revision for a published version |
-| [GitHub Releases](https://github.com/dr4g-team/netvex/releases) | Platform archives, checksums, and release notes |
+| [GitHub Releases](https://github.com/drag-team/netvex-go/releases) | Platform archives, checksums, and release notes |
 | `netvex version` | Version, commit, build time, Go version, OS, and architecture of an executable |
 
 The repository does not commit generated binaries. Development work stays in

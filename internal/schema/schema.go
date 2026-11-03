@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/drag-team/netvex-go/internal/model"
 )
 
 const dialect = "https://json-schema.org/draft/2020-12/schema"
@@ -33,7 +33,7 @@ func Generate(name string) ([]byte, error) {
 	}
 	document := describe(reflect.TypeOf(value))
 	document["$schema"] = dialect
-	document["$id"] = fmt.Sprintf("https://github.com/dr4g-team/netvex/blob/main/docs/schemas/%s.v%d.schema.json", name, model.SchemaVersion)
+	document["$id"] = fmt.Sprintf("https://github.com/drag-team/netvex-go/blob/main/docs/schemas/%s.v%d.schema.json", name, model.SchemaVersion)
 	document["title"] = fmt.Sprintf("NetVex %s, schema version %d", name, model.SchemaVersion)
 	return json.MarshalIndent(document, "", "  ")
 }

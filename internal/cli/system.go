@@ -12,10 +12,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dr4g-team/netvex/internal/config"
-	"github.com/dr4g-team/netvex/internal/engine"
-	metadatapkg "github.com/dr4g-team/netvex/internal/metadata"
-	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/drag-team/netvex-go/internal/config"
+	"github.com/drag-team/netvex-go/internal/engine"
+	metadatapkg "github.com/drag-team/netvex-go/internal/metadata"
+	"github.com/drag-team/netvex-go/internal/model"
 )
 
 func (c CLI) configCmd(args []string) int {

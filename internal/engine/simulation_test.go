@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dr4g-team/netvex/internal/config"
-	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/drag-team/netvex-go/internal/config"
+	"github.com/drag-team/netvex-go/internal/model"
 )
 
 // simulationScale compresses real time so large dead lists finish in seconds.

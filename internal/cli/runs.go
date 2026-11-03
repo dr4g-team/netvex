@@ -9,11 +9,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/dr4g-team/netvex/internal/config"
-	historypkg "github.com/dr4g-team/netvex/internal/history"
-	"github.com/dr4g-team/netvex/internal/model"
-	"github.com/dr4g-team/netvex/internal/output"
-	"github.com/dr4g-team/netvex/internal/store"
+	"github.com/drag-team/netvex-go/internal/config"
+	historypkg "github.com/drag-team/netvex-go/internal/history"
+	"github.com/drag-team/netvex-go/internal/model"
+	"github.com/drag-team/netvex-go/internal/output"
+	"github.com/drag-team/netvex-go/internal/store"
 )
 
 // parseAge adds days to Go durations, the natural unit for retention.

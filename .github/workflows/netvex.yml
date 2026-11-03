@@ -271,7 +271,7 @@ jobs:
           build_date="$(git show -s --format=%cI HEAD)"
           target_arch="${GOARCH_VALUE:-${ARCH}}"
           if test -n "${GOARM_VALUE}"; then export GOARM="${GOARM_VALUE}"; fi
-          CGO_ENABLED=0 GOOS="${OS}" GOARCH="${target_arch}" go build -mod=readonly -trimpath -buildvcs=false -ldflags "-s -w -X github.com/dr4g-team/netvex/internal/buildinfo.Version=${version} -X github.com/dr4g-team/netvex/internal/buildinfo.Commit=${COMMIT} -X github.com/dr4g-team/netvex/internal/buildinfo.Date=${build_date}" -o "dist/${package}/${binary}" ./cmd/netvex
+          CGO_ENABLED=0 GOOS="${OS}" GOARCH="${target_arch}" go build -mod=readonly -trimpath -buildvcs=false -ldflags "-s -w -X github.com/drag-team/netvex-go/internal/buildinfo.Version=${version} -X github.com/drag-team/netvex-go/internal/buildinfo.Commit=${COMMIT} -X github.com/drag-team/netvex-go/internal/buildinfo.Date=${build_date}" -o "dist/${package}/${binary}" ./cmd/netvex
           cp README.md LICENSE CHANGELOG.md "dist/${package}/"
           if test "${FORMAT}" = zip; then
             cd dist

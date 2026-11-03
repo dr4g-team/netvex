@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dr4g-team/netvex/internal/config"
-	historypkg "github.com/dr4g-team/netvex/internal/history"
-	"github.com/dr4g-team/netvex/internal/model"
-	"github.com/dr4g-team/netvex/internal/store"
+	"github.com/drag-team/netvex-go/internal/config"
+	historypkg "github.com/drag-team/netvex-go/internal/history"
+	"github.com/drag-team/netvex-go/internal/model"
+	"github.com/drag-team/netvex-go/internal/store"
 )
 
 func (c CLI) diff(args []string) int {

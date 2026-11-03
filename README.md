@@ -1,7 +1,7 @@
 # NetVex
 
-[![NetVex](https://github.com/dr4g-team/netvex/actions/workflows/netvex.yml/badge.svg)](https://github.com/dr4g-team/netvex/actions/workflows/netvex.yml)
-[![Release](https://img.shields.io/github/v/release/dr4g-team/netvex?sort=semver)](https://github.com/dr4g-team/netvex/releases)
+[![NetVex](https://github.com/drag-team/netvex-go/actions/workflows/netvex.yml/badge.svg)](https://github.com/drag-team/netvex-go/actions/workflows/netvex.yml)
+[![Release](https://img.shields.io/github/v/release/drag-team/netvex-go?sort=semver)](https://github.com/drag-team/netvex-go/releases)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Go version](https://img.shields.io/badge/Go-1.26%2B-00ADD8.svg)](go.mod)
 
@@ -42,13 +42,13 @@ line in `go.mod` selects the exact compiler used for release builds.
 
 Stable Linux archives for amd64, 386, ARMv7, ARM64, and RISC-V 64 plus macOS,
 Windows, and FreeBSD amd64/arm64 archives and their SHA-256 files are published on the
-[GitHub Releases page](https://github.com/dr4g-team/netvex/releases).
+[GitHub Releases page](https://github.com/drag-team/netvex-go/releases).
 Source development on `main` may be newer than the latest release. See
 [versioning and releases](docs/VERSIONING.md) for the exact policy and use
 `netvex version` to identify any installed executable.
 
 ```sh
-git clone https://github.com/dr4g-team/netvex.git
+git clone https://github.com/drag-team/netvex-go.git
 cd netvex
 make check
 make install

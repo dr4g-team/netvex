@@ -28,10 +28,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dr4g-team/netvex/internal/config"
-	"github.com/dr4g-team/netvex/internal/model"
-	"github.com/dr4g-team/netvex/internal/policy"
-	"github.com/dr4g-team/netvex/internal/protocol"
+	"github.com/drag-team/netvex-go/internal/config"
+	"github.com/drag-team/netvex-go/internal/model"
+	"github.com/drag-team/netvex-go/internal/policy"
+	"github.com/drag-team/netvex-go/internal/protocol"
 )
 
 type fixedResolver struct {

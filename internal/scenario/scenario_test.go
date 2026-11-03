@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/dr4g-team/netvex/internal/config"
+	"github.com/drag-team/netvex-go/internal/config"
 )
 
 func TestLoadAndApplyScenario(t *testing.T) {

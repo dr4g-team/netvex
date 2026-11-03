@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dr4g-team/netvex/internal/model"
-	"github.com/dr4g-team/netvex/internal/protocol"
+	"github.com/drag-team/netvex-go/internal/model"
+	"github.com/drag-team/netvex-go/internal/protocol"
 )
 
 // Prescreen separates reachable gateways from dead ones with a TCP handshake.

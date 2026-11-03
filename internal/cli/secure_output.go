@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/dr4g-team/netvex/internal/fsx"
+	"github.com/drag-team/netvex-go/internal/fsx"
 )
 
 type secureOutput struct {

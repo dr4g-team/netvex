@@ -13,12 +13,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/dr4g-team/netvex/internal/config"
-	"github.com/dr4g-team/netvex/internal/intel"
-	"github.com/dr4g-team/netvex/internal/model"
-	"github.com/dr4g-team/netvex/internal/policy"
-	"github.com/dr4g-team/netvex/internal/protocol"
-	"github.com/dr4g-team/netvex/internal/score"
+	"github.com/drag-team/netvex-go/internal/config"
+	"github.com/drag-team/netvex-go/internal/intel"
+	"github.com/drag-team/netvex-go/internal/model"
+	"github.com/drag-team/netvex-go/internal/policy"
+	"github.com/drag-team/netvex-go/internal/protocol"
+	"github.com/drag-team/netvex-go/internal/score"
 )
 
 type Checker struct {

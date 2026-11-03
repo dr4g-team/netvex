@@ -15,10 +15,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/dr4g-team/netvex/internal/buildinfo"
-	"github.com/dr4g-team/netvex/internal/model"
-	"github.com/dr4g-team/netvex/internal/policy"
-	"github.com/dr4g-team/netvex/internal/protocol"
+	"github.com/drag-team/netvex-go/internal/buildinfo"
+	"github.com/drag-team/netvex-go/internal/model"
+	"github.com/drag-team/netvex-go/internal/policy"
+	"github.com/drag-team/netvex-go/internal/protocol"
 )
 
 func (c *Checker) request(ctx context.Context, p model.Proxy, dest policy.Destination, rules compiledResponseRules, dialed *protocol.Dialed) (model.Observation, error) {

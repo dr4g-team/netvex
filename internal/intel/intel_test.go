@@ -3,7 +3,7 @@ package intel
 import (
 	"testing"
 
-	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/drag-team/netvex-go/internal/model"
 )
 
 func TestTargetResultsAndQuorumEvidence(t *testing.T) {

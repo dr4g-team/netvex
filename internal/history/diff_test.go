@@ -3,7 +3,7 @@ package history
 import (
 	"testing"
 
-	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/drag-team/netvex-go/internal/model"
 )
 
 func TestDiffClassifiesEveryChange(t *testing.T) {

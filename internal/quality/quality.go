@@ -12,7 +12,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/dr4g-team/netvex/internal/model"
+	"github.com/drag-team/netvex-go/internal/model"
 )
 
 type Policy struct {
