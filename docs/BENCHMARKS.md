@@ -280,8 +280,8 @@ the four vCPUs, 20,000 proxies at concurrency 128. Three alternating samples:
 The difference is within the sample spread, so live-proxy throughput is unchanged.
 TLS handshakes took 69% of client CPU in this path. Two samples of each variant
 measured 1,205 proxies/s at baseline, 1,581 with `--tls-classical-kex` (31% more),
-and 1,283 with shared TLS session resumption (6% more), which was rejected as not
-worth linking every exit to one client.
+and 1,283 with shared TLS session resumption (6% more). Session resumption is now
+available only through the explicit `--tls-session-cache` privacy trade-off.
 
 `--rate 5000` previously delivered 905 attempts/s because timer overshoot
 accumulated. The limiter unit test now holds 3,500-5,500/s for that setting, and a
@@ -323,4 +323,23 @@ the memory figure matters more than the time.
 
 ```sh
 go test -run '^$' -bench '^BenchmarkCheckLiveProxy$' -benchmem -count=3 ./internal/engine
+```
+
+### Prescreen socket transfer
+
+`BenchmarkPrescreenConnectionReuse` performs a TCP prescreen followed by one
+complete HTTP proxy validation over `net.Pipe`. Five samples on 2026-11-06:
+
+| Mode | Median time/op | Bytes/op | Allocations/op | TCP dials |
+|---|---:|---:|---:|---:|
+| Close and redial | 96.5 us | 21,099 | 174 | 2 |
+| Transfer live socket | 87.7 us | 14,593 | 150 | 1 |
+
+Socket transfer was 9.1% faster in the zero-latency fixture, allocated about
+31% fewer bytes, and removed one dial by construction. Real network improvement
+depends on gateway latency and has not been claimed without a controlled
+authorized pool.
+
+```sh
+go test ./internal/engine -run '^$' -bench '^BenchmarkPrescreenConnectionReuse$' -benchmem -count=5
 ```

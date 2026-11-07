@@ -30,6 +30,10 @@ type compiledResponseRules struct {
 	textPlan          *textMatchPlan
 }
 
+func (r compiledResponseRules) bodyIndependent() bool {
+	return r.minResponseBytes == 0 && r.minThroughputKBPS == 0 && len(r.requireText) == 0 && len(r.rejectText) == 0 && len(r.expectJSON) == 0 && r.expectedBodySHA == ""
+}
+
 func compileResponseRules(rules config.ResponseRules) compiledResponseRules {
 	compiled := compiledResponseRules{
 		minHTTPStatus: rules.MinHTTPStatus, maxHTTPStatus: rules.MaxHTTPStatus,

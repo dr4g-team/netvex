@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/drag-team/netvex-go/internal/model"
 )
@@ -130,6 +131,46 @@ func TestConnectAnswersDigestOnNewConnection(t *testing.T) {
 			t.Fatalf("%s: method=%q connections=%d", algorithm, opened.AuthMethod, connections.Load())
 		}
 		_ = opened.Conn.Close()
+	}
+}
+
+func TestDigestChallengeCacheAvoidsRepeatedChallenge(t *testing.T) {
+	proxy := model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy", Port: 8080, Credentials: &model.Credentials{Username: "user", Password: "right"}}
+	var connections atomic.Int64
+	connector := Connector{DialContext: digestProxy("SHA-256", "right", &connections), DigestCache: NewDigestCache(time.Minute, 8)}
+	for range 2 {
+		opened, err := connector.Open(context.Background(), proxy, destination())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = opened.Conn.Close()
+	}
+	if connections.Load() != 3 {
+		t.Fatalf("connections=%d, want first challenge plus two authenticated connections", connections.Load())
+	}
+}
+
+func TestDigestCacheBoundsExpiryAndDeletion(t *testing.T) {
+	cache := NewDigestCache(time.Millisecond, 1)
+	cache.Put("nil", nil)
+	first := &digestChallenge{nonce: "one"}
+	second := &digestChallenge{nonce: "two"}
+	cache.Put("first", first)
+	if got, ok := cache.Get("first"); !ok || got != first {
+		t.Fatal("cache miss")
+	}
+	cache.Put("second", second)
+	if _, ok := cache.Get("first"); ok {
+		t.Fatal("bounded cache did not evict")
+	}
+	cache.Delete("second")
+	if _, ok := cache.Get("second"); ok {
+		t.Fatal("deleted challenge remained")
+	}
+	cache.Put("expiring", first)
+	time.Sleep(2 * time.Millisecond)
+	if _, ok := cache.Get("expiring"); ok {
+		t.Fatal("expired challenge remained")
 	}
 }
 

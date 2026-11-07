@@ -12,7 +12,7 @@ text / CSV / JSON / gzip / bzip2 / scenario
         |
  bounded job queue
         |
- optional wide TCP prescreen ----------------------> rejected results
+ optional wide TCP prescreen -- live socket ------> rejected results
         |                                                  |
  fixed worker pool                                         |
         |                                                  |
@@ -77,11 +77,19 @@ address.
 Proxy gateway DNS caching is a separate optional path because proxy endpoints
 are operator-supplied rather than validation destinations. It collapses
 concurrent lookups per normalized hostname, retains at most 4,096 hostname
-entries and 16 unique addresses per hostname, rotates cache hits atomically,
+entries by default (configurable) and 16 unique addresses per hostname, rotates cache hits atomically,
 does not cache failures, and shares the existing connect deadline. Literal IP
 endpoints bypass it. A single concurrency-safe `net.Dialer` is reused by the
-checker; established proxy connections are deliberately never pooled between
-measurements.
+checker. A healthy prescreen socket has one owner and is transferred into its
+first validation; it is never pooled or shared. Optional TLS resumption shares
+only bounded cryptographic sessions, not open tunnels.
+
+An optional gateway cache single-flights concurrent deterministic failures and
+never shares a successful connection. The protocol cache retains only a
+successful auto-detection result. The Digest cache retains the public challenge,
+never credentials or an Authorization value. All are bounded and expiring.
+Runtime AIMD and learned timeouts are separate opt-ins so fixed runs remain
+reproducible.
 
 Deduplication retains process-local seeded 96-bit identities so credential variants
 remain distinct without exposing a credential-derived public ID or serializable

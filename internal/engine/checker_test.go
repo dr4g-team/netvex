@@ -494,21 +494,12 @@ func TestSniffHintSkipsWrongProtocols(t *testing.T) {
 	c.Config.Repeat = 1
 	var dials atomic.Int64
 	c.Connector.DialContext = func(context.Context, string, string) (net.Conn, error) {
-		first := dials.Add(1) == 1
+		dials.Add(1)
 		client, server := net.Pipe()
 		go func() {
 			defer server.Close()
-			if first {
-				probe := make([]byte, 8)
-				if _, err := io.ReadFull(server, probe); err != nil {
-					return
-				}
-				_, _ = server.Write([]byte{5, 0})
-				_, _ = io.Copy(io.Discard, server)
-				return
-			}
-			greeting := make([]byte, 3)
-			if _, err := io.ReadFull(server, greeting); err != nil {
+			probe := make([]byte, 8)
+			if _, err := io.ReadFull(server, probe); err != nil {
 				return
 			}
 			_, _ = server.Write([]byte{5, 0})
@@ -529,8 +520,54 @@ func TestSniffHintSkipsWrongProtocols(t *testing.T) {
 	if result.Status != model.StatusOK || result.Protocol != model.ProtocolSOCKS5 {
 		t.Fatalf("result=%+v", result)
 	}
-	if dials.Load() != 2 {
-		t.Fatalf("expected one sniff and one validation, got %d connections", dials.Load())
+	if dials.Load() != 1 {
+		t.Fatalf("expected sniff continuation on one connection, got %d", dials.Load())
+	}
+}
+
+func TestSniffContinuationCompletesSOCKS5Authentication(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	var dials atomic.Int64
+	c.Connector.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		client, server := net.Pipe()
+		go func() {
+			defer server.Close()
+			probe := make([]byte, 8)
+			if _, err := io.ReadFull(server, probe); err != nil {
+				return
+			}
+			_, _ = server.Write([]byte{5, 2})
+			authHead := make([]byte, 2)
+			if _, err := io.ReadFull(server, authHead); err != nil {
+				return
+			}
+			authTail := make([]byte, int(authHead[1])+1)
+			if _, err := io.ReadFull(server, authTail); err != nil {
+				return
+			}
+			password := make([]byte, int(authTail[len(authTail)-1]))
+			if _, err := io.ReadFull(server, password); err != nil {
+				return
+			}
+			_, _ = server.Write([]byte{1, 0})
+			connect := make([]byte, 10)
+			if _, err := io.ReadFull(server, connect); err != nil {
+				return
+			}
+			_, _ = server.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+			reader := bufio.NewReader(server)
+			if _, err := http.ReadRequest(reader); err != nil {
+				return
+			}
+			_, _ = io.WriteString(server, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+		}()
+		return client, nil
+	}
+	proxy := model.Proxy{Protocol: model.ProtocolAuto, Host: "proxy.test", Port: 1080, Credentials: &model.Credentials{Username: "u", Password: "p"}}
+	result := c.Check(context.Background(), proxy)
+	if result.Status != model.StatusOK || result.Observations[0].ProxyAuthentication != "username_password" || dials.Load() != 1 {
+		t.Fatalf("dials=%d result=%+v", dials.Load(), result)
 	}
 }
 
@@ -547,6 +584,27 @@ func TestNarrowProtocols(t *testing.T) {
 	}
 	if got := narrowProtocols([]model.Protocol{model.ProtocolHTTP}, model.ProtocolSOCKS5); len(got) != 1 {
 		t.Fatalf("a hint outside the candidates must not empty them: %v", got)
+	}
+}
+
+func TestProtocolCacheIsBoundedAndExpires(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.ProtocolCacheTTL = time.Millisecond
+	cfg.MaxInputEntries = 1
+	c := NewChecker(cfg)
+	first := model.Proxy{Protocol: model.ProtocolAuto, Host: "one.test", Port: 80}
+	second := model.Proxy{Protocol: model.ProtocolAuto, Host: "two.test", Port: 80}
+	c.rememberProtocol(first, model.ProtocolHTTP)
+	if got, ok := c.cachedProtocol(first); !ok || got != model.ProtocolHTTP {
+		t.Fatalf("cached=%q ok=%t", got, ok)
+	}
+	c.rememberProtocol(second, model.ProtocolSOCKS5)
+	if len(c.protocolCache) != 1 {
+		t.Fatalf("cache entries=%d", len(c.protocolCache))
+	}
+	time.Sleep(2 * time.Millisecond)
+	if _, ok := c.cachedProtocol(second); ok {
+		t.Fatal("expired protocol remained")
 	}
 }
 
@@ -728,6 +786,78 @@ func TestPrescreenStopsOnCancellation(t *testing.T) {
 		case <-deadline:
 			t.Fatal("prescreen did not stop")
 		}
+	}
+}
+
+func TestPreparedPrescreenSocketIsReused(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.PrescreenRetries = 0
+	var dials atomic.Int64
+	c.Connector.DialContext = func(context.Context, string, string) (net.Conn, error) {
+		dials.Add(1)
+		client, server := net.Pipe()
+		go func() {
+			defer server.Close()
+			reader := bufio.NewReader(server)
+			_, _ = http.ReadRequest(reader)
+			_, _ = io.WriteString(server, "HTTP/1.1 200 Connection Established\r\n\r\n")
+			_, _ = http.ReadRequest(reader)
+			_, _ = io.WriteString(server, "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok")
+		}()
+		return client, nil
+	}
+	input := make(chan model.Proxy, 1)
+	input <- model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080}
+	close(input)
+	prepared, rejected := c.PrescreenPrepared(context.Background(), input, 1, 1, true)
+	candidate := <-prepared
+	if result := c.CheckPrepared(context.Background(), candidate); result.Status != model.StatusOK {
+		t.Fatalf("result=%+v", result)
+	}
+	for result := range rejected {
+		t.Fatalf("unexpected rejection: %+v", result)
+	}
+	if dials.Load() != 1 {
+		t.Fatalf("dials=%d, want one shared prescreen/validation connection", dials.Load())
+	}
+}
+
+func TestWorkingOnlyStopsAfterValidHeaders(t *testing.T) {
+	c := baseChecker("http://target.test/")
+	c.Config.WorkingOnly = true
+	c.Connector.DialContext = pipeDial(func(conn net.Conn) {
+		reader := bufio.NewReader(conn)
+		_, _ = http.ReadRequest(reader)
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+		_, _ = http.ReadRequest(reader)
+		_, _ = io.WriteString(conn, "HTTP/1.1 200 OK\r\nContent-Length: 1000000\r\n\r\n")
+	})
+	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	if result.Status != model.StatusOK || result.Observations[0].BodyBytes != 0 {
+		t.Fatalf("result=%+v", result)
+	}
+}
+
+func TestStagedMatrixStopsAfterGateFailure(t *testing.T) {
+	c := baseChecker("http://target.test/gate")
+	c.Config.Targets = []string{"http://target.test/gate", "http://target.test/full"}
+	c.Config.TargetMatrix = true
+	c.Config.StagedValidation = true
+	c.Config.TargetQuorum = 2
+	var dials atomic.Int64
+	c.Connector.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		dials.Add(1)
+		return pipeDial(func(conn net.Conn) {
+			reader := bufio.NewReader(conn)
+			_, _ = http.ReadRequest(reader)
+			_, _ = io.WriteString(conn, "HTTP/1.1 200 Connection Established\r\n\r\n")
+			_, _ = http.ReadRequest(reader)
+			_, _ = io.WriteString(conn, "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n")
+		})(ctx, network, address)
+	}
+	result := c.Check(context.Background(), model.Proxy{Protocol: model.ProtocolHTTP, Host: "proxy.test", Port: 8080})
+	if dials.Load() != 1 || result.Attempts != 1 {
+		t.Fatalf("dials=%d attempts=%d result=%+v", dials.Load(), result.Attempts, result)
 	}
 }
 

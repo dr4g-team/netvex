@@ -88,6 +88,14 @@ legitimately be private in controlled deployments. Enabling the cache can keep
 using an address until its configured TTL expires; disable it for providers
 whose gateway DNS changes are intentionally faster than that interval.
 
+Gateway-failure and protocol caches are disabled by default outside profiles
+that explicitly select them, bounded, and process-local. Only deterministic
+connect failures are negatively cached; timeouts and local resource exhaustion
+are not. Digest caching stores the server's public challenge only. It never
+stores credentials, a generated response, or an authentication header. TLS
+session caching is opt-in because session resumption can correlate checks made
+by the same process.
+
 Credentials present in process arguments may be visible in shell history and the
 process list. Prefer a mode-0600 input file or protected standard input. Both
 username and password are replaced by `***` in ordinary results. Public endpoint

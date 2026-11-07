@@ -371,9 +371,19 @@ type RunConfiguration struct {
 	SaveStatus        string   `json:"save_status,omitempty"`
 	SaveGzip          bool     `json:"save_gzip,omitempty"`
 	Prescreen         bool     `json:"prescreen,omitempty"`
+	PrescreenReuse    bool     `json:"prescreen_reuse,omitempty"`
+	AdaptivePrescreen bool     `json:"adaptive_prescreen,omitempty"`
 	PrescreenWorkers  int      `json:"prescreen_concurrency,omitempty"`
 	PrescreenRetries  int      `json:"prescreen_retries,omitempty"`
 	ProxyDNSCacheTTL  string   `json:"proxy_dns_cache_ttl,omitempty"`
+	GatewayFailureTTL string   `json:"gateway_failure_ttl,omitempty"`
+	ProtocolCacheTTL  string   `json:"protocol_cache_ttl,omitempty"`
+	AuthCacheTTL      string   `json:"auth_cache_ttl,omitempty"`
+	AdaptiveRuntime   bool     `json:"adaptive_concurrency,omitempty"`
+	AdaptiveTimeouts  bool     `json:"adaptive_timeouts,omitempty"`
+	WorkingOnly       bool     `json:"working_only,omitempty"`
+	StagedValidation  bool     `json:"staged_validation,omitempty"`
+	TLSSessionCache   bool     `json:"tls_session_cache,omitempty"`
 	MaxResponseBytes  int64    `json:"max_response_bytes"`
 	IntelligenceBytes int64    `json:"intelligence_body_bytes"`
 	MinResponseBytes  int64    `json:"min_response_bytes,omitempty"`

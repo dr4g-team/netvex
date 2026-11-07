@@ -44,6 +44,7 @@ type checkSession struct {
 	metadata        *metadatapkg.Provider
 
 	checker      *engine.Checker
+	adaptive     *engine.AdaptiveController
 	identityKey  func() []byte
 	targetHealth map[string]model.TargetHealth
 
@@ -518,19 +519,30 @@ func (s *checkSession) readInput(ctx context.Context) {
 func (s *checkSession) startPipeline(ctx context.Context) <-chan model.Result {
 	cfg := s.config
 	runner := engine.Engine{Workers: cfg.Concurrency, QueueSize: cfg.QueueSize, Processor: s.checker}
-	var validationInput <-chan model.Proxy = s.jobs
-	var unreachable <-chan model.Result
+	prescreenWorkers := 0
 	if cfg.Prescreen {
-		workers := boundedPrescreenWorkers(cfg.PrescreenWorkers, cfg.Concurrency)
+		prescreenWorkers = boundedPrescreenWorkers(cfg.PrescreenWorkers, cfg.Concurrency)
+	}
+	if cfg.AdaptiveConcurrency {
+		runner.Adaptive = engine.NewAdaptiveController(cfg.AdaptiveMinimum, max(cfg.Concurrency, prescreenWorkers), cfg.AdaptiveWindow)
+		s.adaptive = runner.Adaptive
+	}
+	var unreachable <-chan model.Result
+	var results <-chan model.Result
+	if cfg.Prescreen {
+		workers := prescreenWorkers
 		if workers < cfg.PrescreenWorkers {
 			fmt.Fprintf(s.cli.Stderr, "prescreen concurrency reduced to %d by the file descriptor limit\n", workers)
 		}
-		validationInput, unreachable = s.checker.Prescreen(ctx, s.jobs, workers, cfg.QueueSize)
+		validationInput, rejected := s.checker.PrescreenPreparedControlled(ctx, s.jobs, workers, cfg.QueueSize, cfg.PrescreenReuse, runner.Adaptive)
+		unreachable = rejected
+		results = runner.RunPrepared(ctx, validationInput)
+	} else {
+		results = runner.Run(ctx, s.jobs)
 	}
 	if cfg.CanaryInterval > 0 {
 		go s.checker.RunCanary(ctx)
 	}
-	results := runner.Run(ctx, validationInput)
 	if unreachable != nil {
 		results = engine.Merge(results, unreachable, cfg.QueueSize)
 	}
@@ -582,7 +594,7 @@ func (s *checkSession) reportProgress(live bool) {
 	processed := summary.Processed - summary.Restored
 	elapsed := time.Since(s.start)
 	if live {
-		fmt.Fprint(s.cli.Stderr, clearLine, progressLine(progressState{processed: int64(processed), scheduled: s.scheduled.Load(), ingestDone: s.parserFinished.Load(), ok: summary.Successful, failed: summary.Failed, elapsed: elapsed}))
+		fmt.Fprint(s.cli.Stderr, clearLine, progressLine(progressState{processed: int64(processed), scheduled: s.scheduled.Load(), ingestDone: s.parserFinished.Load(), ok: summary.Successful, failed: summary.Failed, elapsed: elapsed, concurrency: s.currentConcurrency()}))
 		return
 	}
 	pending := max(s.scheduled.Load()-int64(processed), 0)
@@ -590,7 +602,14 @@ func (s *checkSession) reportProgress(live bool) {
 	if s.parserFinished.Load() {
 		ingest = "done"
 	}
-	fmt.Fprintf(s.cli.Stderr, "processed_new=%d restored=%d scheduled=%d pending=%d ingest=%s ok=%d unreliable=%d failed=%d inconclusive=%d timeouts=%d rate=%.1f/s elapsed=%s\n", processed, summary.Restored, s.scheduled.Load(), pending, ingest, summary.Successful, summary.Unreliable, summary.Failed, summary.Inconclusive, summary.Timeouts, float64(processed)/elapsed.Seconds(), elapsed.Round(100*time.Millisecond))
+	fmt.Fprintf(s.cli.Stderr, "processed_new=%d restored=%d scheduled=%d pending=%d ingest=%s ok=%d unreliable=%d failed=%d inconclusive=%d timeouts=%d concurrency=%d rate=%.1f/s elapsed=%s\n", processed, summary.Restored, s.scheduled.Load(), pending, ingest, summary.Successful, summary.Unreliable, summary.Failed, summary.Inconclusive, summary.Timeouts, s.currentConcurrency(), float64(processed)/elapsed.Seconds(), elapsed.Round(100*time.Millisecond))
+}
+
+func (s *checkSession) currentConcurrency() int {
+	if s.adaptive != nil {
+		return s.adaptive.Limit()
+	}
+	return s.config.Concurrency
 }
 
 // record sends one result to every sink and accumulates it into the summary.

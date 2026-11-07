@@ -21,10 +21,10 @@ func (c *Checker) ConfigureCABundles(destinationPath, proxyPath string) error {
 		return fmt.Errorf("proxy CA bundle: %w", err)
 	}
 	if destinationRoots != nil {
-		c.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: destinationRoots}
+		c.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: destinationRoots, ClientSessionCache: c.tlsSessionCache}
 	}
 	if proxyRoots != nil {
-		c.Connector.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: proxyRoots}
+		c.Connector.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: proxyRoots, ClientSessionCache: c.tlsSessionCache}
 	}
 	return nil
 }
@@ -33,7 +33,7 @@ func (c *Checker) ConfigureCABundles(destinationPath, proxyPath string) error {
 // Classical key exchange is opt-in: it saves about a quarter of validation CPU by
 // dropping the hybrid post-quantum share, which is reasonable for test traffic.
 func (c *Checker) destinationTLS(host string) *tls.Config {
-	config := &tls.Config{MinVersion: tls.VersionTLS12}
+	config := &tls.Config{MinVersion: tls.VersionTLS12, ClientSessionCache: c.tlsSessionCache}
 	if c.TLSConfig != nil {
 		config = c.TLSConfig.Clone()
 		if config.MinVersion == 0 {

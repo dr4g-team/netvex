@@ -87,6 +87,10 @@ making response-memory, throughput, and protocol-detection conditions
 reproducible without consulting the original command line.
 `proxy_dns_cache_ttl` records whether gateway resolution reuse affected the
 run; `0s` means every hostname dial used the system resolver normally.
+`prescreen_reuse`, the bounded gateway/protocol/auth cache TTLs,
+`adaptive_concurrency`, `adaptive_timeouts`, `working_only`,
+`staged_validation`, and `tls_session_cache` make performance-affecting choices
+explicit in saved evidence.
 `keep_partial` records the explicit interruption-output policy when enabled.
 `prescreen`, `skip_connect_retry`, `tls_classical_kex`, `probe_udp`,
 `expect_countries`, `canary_interval`, `save_status`, `save_gzip`,

@@ -113,6 +113,14 @@ func (c *Checker) requestWithRedirects(ctx context.Context, p model.Proxy, dest 
 		_ = timed.Conn.Close()
 		return c.followRedirect(ctx, p, loc, redirectsLeft-1, obs, rules)
 	}
+	if c.Config.WorkingOnly && rules.bodyIndependent() && c.expectCountries == nil {
+		if resp.StatusCode < rules.minHTTPStatus || resp.StatusCode > rules.maxHTTPStatus {
+			return obs, &protocol.Error{Stage: model.StageResponse, Status: model.StatusInconclusive, Code: "http_status", Detail: fmt.Sprintf("destination returned HTTP status %d", resp.StatusCode)}
+		}
+		obs.Status = model.StatusOK
+		obs.Stage = model.StageComplete
+		return obs, nil
+	}
 	if err := c.inspectResponse(&obs, resp, rules); err != nil {
 		return obs, err
 	}

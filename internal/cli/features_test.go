@@ -452,8 +452,11 @@ func TestFlagsOverrideConfigurationAndProfiles(t *testing.T) {
 		t.Fatalf("configuration lost: %+v", cfg)
 	}
 	cfg = load(checkOptions{profile: "fast"})
-	if cfg.Repeat != 1 || !cfg.Prescreen {
+	if cfg.Repeat != 1 || !cfg.Prescreen || !cfg.PrescreenReuse || cfg.GatewayFailureTTL != 2*time.Second || cfg.ProtocolCacheTTL != 10*time.Minute || cfg.AuthCacheTTL != 10*time.Minute {
 		t.Fatalf("profile not applied: %+v", cfg)
+	}
+	if cfg.AdaptiveConcurrency || cfg.AdaptiveTimeouts || cfg.AdaptivePrescreen || cfg.TLSSessionCache || cfg.WorkingOnly || cfg.StagedValidation {
+		t.Fatalf("fast profile unexpectedly enabled opt-in behavior: %+v", cfg)
 	}
 	cfg = load(checkOptions{profile: "fast", repeat: 3, concurrency: "9", prescreenRetries: 2})
 	if cfg.Repeat != 3 || cfg.Concurrency != 9 {

@@ -13,6 +13,7 @@ type progressState struct {
 	processed, scheduled int64
 	ingestDone           bool
 	ok, failed           int
+	concurrency          int
 	elapsed              time.Duration
 }
 
@@ -30,6 +31,9 @@ func progressLine(state progressState) string {
 		fmt.Fprintf(&line, "%d/%d+", state.processed, state.scheduled)
 	}
 	fmt.Fprintf(&line, "  ok=%d failed=%d  %.0f/s", state.ok, state.failed, rate)
+	if state.concurrency > 0 {
+		fmt.Fprintf(&line, "  c=%d", state.concurrency)
+	}
 	if state.ingestDone && rate > 0 {
 		remaining := time.Duration(float64(state.scheduled-state.processed) / rate * float64(time.Second))
 		fmt.Fprintf(&line, "  ETA %s", remaining.Round(time.Second))

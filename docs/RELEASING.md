@@ -52,7 +52,7 @@ Download each archive and its checksum onto a matching clean host. For example,
 on Linux:
 
 ```sh
-version="1.0.1"
+version="1.0.2"
 sha256sum --check "netvex-v${version}-linux-amd64.tar.gz.sha256"
 tar -xzf "netvex-v${version}-linux-amd64.tar.gz"
 ./"netvex-v${version}-linux-amd64"/netvex version

@@ -6,6 +6,35 @@ All notable changes to NetVex are documented in this file. The project follows
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-11-07
+
+### Added
+
+- Opt-in AIMD concurrency, learned TCP timeouts, selective prescreen retries,
+  staged target matrices, minimal working-list evidence, and TLS session reuse.
+- Bounded, expiring caches for deterministic gateway failures, successful auto
+  protocol detection, and public Digest challenges.
+
+### Changed
+
+- A successful TCP prescreen now transfers its live socket into the first
+  validation attempt, removing a redundant DNS lookup and TCP handshake.
+- SOCKS5 auto-detection continues negotiation on its sniff socket instead of
+  reconnecting for authentication and CONNECT.
+- The `fast` profile enables connection reuse and conservative gateway,
+  protocol, and Digest challenge caches; all runtime-adaptive controls remain
+  opt-in.
+
+### Security
+
+- Authentication caching stores only server challenges. Proxy credentials and
+  generated authorization values are never retained.
+- Cancellation drains ownership of buffered prescreen sockets, preventing
+  descriptor leaks during interrupted high-concurrency runs.
+- Static analysis runs on the fully patched Go 1.26.10 toolchain, avoiding
+  incompatibilities when analysis tools inspect newer toolchain internals;
+  release binaries remain built with Go 1.27.3.
+
 ## [1.0.1] - 2026-11-03
 
 ### Changed
@@ -82,6 +111,7 @@ All notable changes to NetVex are documented in this file. The project follows
 - TLS verification remains enabled for proxy and destination connections;
   optional certificate pins detect interception by otherwise trusted roots.
 
-[Unreleased]: https://github.com/drag-team/netvex-go/compare/v1.0.1...HEAD
+[Unreleased]: https://github.com/drag-team/netvex-go/compare/v1.0.2...HEAD
+[1.0.2]: https://github.com/drag-team/netvex-go/compare/v1.0.1...v1.0.2
 [1.0.1]: https://github.com/drag-team/netvex-go/compare/v1.0.0...v1.0.1
 [1.0.0]: https://github.com/drag-team/netvex-go/releases/tag/v1.0.0

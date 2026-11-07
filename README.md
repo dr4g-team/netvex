@@ -210,7 +210,7 @@ The execution profiles are:
 
 | Profile | Attempts | Minimum success | Behavior |
 |---|---:|---:|---|
-| `fast` | 1 | 100% | Short timeouts, `--prescreen`, one-minute proxy DNS cache, no retry delay, stops on success |
+| `fast` | 1 | 100% | Short timeouts, socket-reusing `--prescreen`, bounded gateway/DNS/protocol/auth caches, no retry delay, stops on success |
 | `balanced` | 2 | 50% | Production default |
 | `thorough` | 5 | 80% | Longer timeouts and stronger reliability evidence |
 
@@ -255,12 +255,44 @@ does not necessarily improve throughput. `--connect-timeout`,
 `--dns-cache-ttl` control failure cost and repeat behavior. For commercial
 gateway lists that repeat one hostname, `--proxy-dns-cache-ttl` coalesces
 concurrent lookups and rotates across at most 16 unique returned addresses;
-the cache itself is bounded to 4,096 hostnames and failures are never cached.
+the cache is bounded by `--proxy-dns-cache-entries` (4,096 by default), and DNS
+failures are never cached.
 It defaults to off except in the `fast` profile, where the default is one
 minute. Set it to `0s` when fresh DNS selection is part of the proxy service's
 session semantics. Automatic protocol
 detection gives each candidate a fair bounded share of the overall timeout and
-prioritizes likely protocols for common HTTP, HTTPS, and SOCKS ports.
+prioritizes likely protocols for common HTTP, HTTPS, and SOCKS ports. A SOCKS5
+sniff now continues authentication and CONNECT on the same socket; successful
+auto detections can be reused through the bounded protocol cache.
+
+The TCP prescreen transfers its live socket to validation instead of discarding
+it and dialing twice. `--prescreen-reuse=false` restores the isolated behavior.
+The `fast` profile also enables short, bounded caches for deterministic gateway
+failures, successful protocol detection, and public Digest challenges;
+credentials and generated authorization headers are never cached. Tune or
+disable them with `--gateway-failure-ttl`, `--protocol-cache-ttl`, and
+`--auth-cache-ttl`.
+
+Every runtime-adaptive mechanism is opt-in. `--adaptive-concurrency` starts at
+`--adaptive-minimum`, grows after clean windows, and halves only when the local
+machine reports socket or descriptor exhaustion; remote timeouts do not reduce
+it. The same admission controller covers prescreen and validation, then clamps
+back to the validation worker ceiling when prescreen finishes.
+`--adaptive-timeouts` learns a conservative TCP timeout from at least 16
+successful connects and clamps it between `--adaptive-timeout-floor` and
+`--connect-timeout`. `--adaptive-prescreen` retries only transient precheck
+failures. Fixed settings remain the reproducible default.
+
+For a credentials-only working list, `--working-only` closes a qualified
+response after valid headers and skips body hashing, intelligence extraction,
+and capability probes when no configured rule requires them.
+`--staged-validation` makes the first target in a multi-target matrix a cheap
+gate. `--tls-session-cache` is optional because it improves repeated TLS
+handshakes at the cost of linking measurements within the process.
+
+```sh
+netvex check --protocol http --profile fast --working-only --working-output funcionando.txt proxies.txt
+```
 
 `--max-response-bytes` bounds each downloaded response body and defaults to
 1 MiB. Lower it for high-concurrency reachability checks; raise it deliberately
@@ -286,7 +318,8 @@ workers will improve a particular network.
 
 Interactive terminals show a live line on stderr with progress, rates, and an
 ETA once the input is fully read; `--no-progress` disables it. `--verbose` prints
-periodic counters instead. Redirected and machine-readable stdout never receives
+periodic counters instead. Both report the current admission limit, including
+runtime AIMD changes. Redirected and machine-readable stdout never receives
 ANSI sequences or progress messages. `--cpu-profile` and `--mem-profile` write
 pprof data for a real run.
 
@@ -377,9 +410,9 @@ Environment configuration covers every persistent engine setting:
 |---|---|
 | Concurrency | `NETVEX_CONCURRENCY`, `NETVEX_QUEUE_SIZE`, `NETVEX_PER_TARGET_CONCURRENCY`, `NETVEX_REQUESTS_PER_SECOND` |
 | Measurements | `NETVEX_REPEAT`, `NETVEX_MIN_SUCCESS_RATE`, `NETVEX_STOP_ON_SUCCESS`, `NETVEX_RETRY_PERMANENT_FAILURES`, `NETVEX_ROTATION_SAMPLES`, `NETVEX_ROTATION_INTERVAL` |
-| Time | `NETVEX_CONNECT_TIMEOUT`, `NETVEX_REQUEST_TIMEOUT`, `NETVEX_AUTO_PROBE_TIMEOUT`, `NETVEX_DNS_CACHE_TTL`, `NETVEX_PROXY_DNS_CACHE_TTL`, `NETVEX_RETRY_BACKOFF`, `NETVEX_PROGRESS_INTERVAL` |
+| Time | `NETVEX_CONNECT_TIMEOUT`, `NETVEX_REQUEST_TIMEOUT`, `NETVEX_AUTO_PROBE_TIMEOUT`, `NETVEX_DNS_CACHE_TTL`, `NETVEX_PROXY_DNS_CACHE_TTL`, `NETVEX_GATEWAY_FAILURE_TTL`, `NETVEX_PROTOCOL_CACHE_TTL`, `NETVEX_AUTH_CACHE_TTL`, `NETVEX_RETRY_BACKOFF`, `NETVEX_PROGRESS_INTERVAL` |
 | Destinations | `NETVEX_TARGETS`, `NETVEX_ALLOWED_TARGET_HOSTS`, `NETVEX_MAX_REDIRECTS`, `NETVEX_ALLOW_PRIVATE_TARGETS`, `NETVEX_ALLOW_PRIVATE_PROXIES`, `NETVEX_ALLOW_REDIRECT_DOWNGRADE`, `NETVEX_ALLOW_REMOTE_DNS`, `NETVEX_TARGET_MATRIX`, `NETVEX_TARGET_QUORUM`, `NETVEX_PREFLIGHT`, `NETVEX_CANARY_INTERVAL` |
-| Speed | `NETVEX_PRESCREEN`, `NETVEX_PRESCREEN_CONCURRENCY`, `NETVEX_PRESCREEN_RETRIES`, `NETVEX_PRESCREEN_TIMEOUT`, `NETVEX_SKIP_CONNECT_RETRY`, `NETVEX_TLS_CLASSICAL_KEX` |
+| Speed | `NETVEX_PRESCREEN`, `NETVEX_PRESCREEN_REUSE`, `NETVEX_ADAPTIVE_PRESCREEN`, `NETVEX_PRESCREEN_CONCURRENCY`, `NETVEX_PRESCREEN_RETRIES`, `NETVEX_PRESCREEN_TIMEOUT`, `NETVEX_ADAPTIVE_CONCURRENCY`, `NETVEX_ADAPTIVE_MINIMUM`, `NETVEX_ADAPTIVE_WINDOW`, `NETVEX_ADAPTIVE_TIMEOUTS`, `NETVEX_ADAPTIVE_TIMEOUT_FLOOR`, `NETVEX_PROXY_DNS_CACHE_ENTRIES`, `NETVEX_WORKING_ONLY`, `NETVEX_STAGED_VALIDATION`, `NETVEX_TLS_SESSION_CACHE`, `NETVEX_SKIP_CONNECT_RETRY`, `NETVEX_TLS_CLASSICAL_KEX` |
 | Response qualification | `NETVEX_MIN_RESPONSE_BYTES`, `NETVEX_MIN_THROUGHPUT_KBPS`, `NETVEX_REQUIRE_TEXT`, `NETVEX_REJECT_TEXT`, `NETVEX_EXPECT_JSON`, `NETVEX_EXPECTED_BODY_SHA256`, `NETVEX_ANONYMITY_BASELINE_IP`, `NETVEX_EXPECT_COUNTRY`, `NETVEX_PROBE_UDP` |
 | TLS trust | `NETVEX_CA_BUNDLE`, `NETVEX_PROXY_CA_BUNDLE`, `NETVEX_PIN_SHA256` |
 | Resource limits | `NETVEX_MAX_INPUT_BYTES`, `NETVEX_MAX_INPUT_ENTRIES`, `NETVEX_MAX_RESPONSE_BYTES`, `NETVEX_INTELLIGENCE_BODY_BYTES` |

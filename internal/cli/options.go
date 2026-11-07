@@ -27,9 +27,16 @@ type checkOptions struct {
 	targets, allowHosts, requireText, rejectText, expectJSON    stringsFlag
 	allowPrivate, allowRemoteDNS, save, requireSuccess, verbose bool
 	allowPrivateProxies, prescreen, noConnectRetry              bool
+	prescreenReuse, adaptivePrescreen, adaptiveConcurrency      bool
+	adaptiveTimeouts                                            bool
+	workingOnly, stagedValidation, tlsSessionCache              bool
 	tlsClassicalKEX                                             bool
-	prescreenWorkers, prescreenRetries                          int
+	prescreenWorkers, prescreenRetries, adaptiveMinimum         int
+	adaptiveWindow, proxyDNSCacheEntries                        int
 	prescreenTimeout, canaryInterval                            string
+	gatewayFailureTTL, protocolCacheTTL                         string
+	authCacheTTL                                                string
+	adaptiveTimeoutFloor                                        string
 	workingDir, workingTemplate, saveStatus                     string
 	cpuProfile, memProfile                                      string
 	noProgress, resumeAnyConfig, probeUDP, saveGzip             bool
@@ -66,7 +73,7 @@ var checkFlagGroups = []struct {
 }{
 	{"Input", []string{"input-format", "protocol", "max-input-bytes", "max-input-entries", "no-deduplicate", "scenario", "label"}},
 	{"Targets and policy", []string{"target", "allow-host", "allow-private-targets", "allow-private-proxies", "allow-remote-dns", "allow-redirect-downgrade", "no-cleartext-credentials", "max-redirects", "preflight", "canary-interval", "target-matrix", "target-quorum"}},
-	{"Speed and concurrency", []string{"profile", "concurrency", "queue-size", "per-target", "rate", "prescreen", "prescreen-concurrency", "prescreen-retries", "prescreen-timeout", "no-connect-retry", "tls-classical-kex", "dns-cache-ttl", "proxy-dns-cache-ttl"}},
+	{"Speed and concurrency", []string{"profile", "concurrency", "queue-size", "per-target", "rate", "prescreen", "prescreen-reuse", "adaptive-prescreen", "prescreen-concurrency", "prescreen-retries", "prescreen-timeout", "adaptive-concurrency", "adaptive-minimum", "adaptive-window", "adaptive-timeouts", "adaptive-timeout-floor", "gateway-failure-ttl", "no-connect-retry", "tls-classical-kex", "tls-session-cache", "dns-cache-ttl", "proxy-dns-cache-ttl", "proxy-dns-cache-entries", "protocol-cache-ttl", "auth-cache-ttl", "working-only", "staged-validation"}},
 	{"Timeouts and retries", []string{"connect-timeout", "request-timeout", "auto-probe-timeout", "repeat", "min-success-rate", "retry-backoff", "retry-permanent", "stop-on-success"}},
 	{"Response rules", []string{"require-text", "reject-text", "expect-json", "expect-sha256", "pin-sha256", "expect-country", "min-response-bytes", "max-response-bytes", "min-throughput-kbps", "intelligence-bytes"}},
 	{"Evidence", []string{"baseline-ip", "metadata-file", "ca-bundle", "proxy-ca-bundle", "rotation-samples", "rotation-interval", "probe-udp"}},
@@ -142,11 +149,25 @@ func (c CLI) addCheckFlags(fs *flag.FlagSet, o *checkOptions) {
 	fs.BoolVar(&o.allowRemoteDNS, "allow-remote-dns", false, "allow proxy-side DNS for SOCKS4a/SOCKS5 and HTTP CONNECT/forwarding (reduces rebinding protection)")
 	fs.BoolVar(&o.allowPrivateProxies, "allow-private-proxies", false, "allow proxy gateways on private, loopback, or special-purpose addresses")
 	fs.BoolVar(&o.prescreen, "prescreen", false, "reject unreachable gateways with a wide TCP-only stage before validation")
+	fs.BoolVar(&o.prescreenReuse, "prescreen-reuse", true, "reuse the live prescreen socket for the first validation")
+	fs.BoolVar(&o.adaptivePrescreen, "adaptive-prescreen", false, "retry only transient prescreen failures")
 	fs.IntVar(&o.prescreenWorkers, "prescreen-concurrency", 0, "concurrent prescreen connects (1..65536)")
 	fs.IntVar(&o.prescreenRetries, "prescreen-retries", -1, "extra prescreen connects before a gateway is rejected (0..3)")
 	fs.StringVar(&o.prescreenTimeout, "prescreen-timeout", "", "prescreen connect timeout; 0 uses connect-timeout")
 	fs.BoolVar(&o.noConnectRetry, "no-connect-retry", false, "do not repeat measurements after a TCP connect failure")
 	fs.BoolVar(&o.tlsClassicalKEX, "tls-classical-kex", false, "use X25519 only for validation TLS, trading post-quantum key exchange for CPU")
+	fs.BoolVar(&o.tlsSessionCache, "tls-session-cache", false, "reuse bounded TLS sessions across repeated destinations (privacy trade-off)")
+	fs.BoolVar(&o.adaptiveConcurrency, "adaptive-concurrency", false, "opt in to AIMD concurrency control for local resource pressure")
+	fs.IntVar(&o.adaptiveMinimum, "adaptive-minimum", 0, "initial and minimum adaptive concurrency")
+	fs.IntVar(&o.adaptiveWindow, "adaptive-window", 0, "results per adaptive concurrency decision")
+	fs.BoolVar(&o.adaptiveTimeouts, "adaptive-timeouts", false, "adapt TCP timeouts from successful samples")
+	fs.StringVar(&o.adaptiveTimeoutFloor, "adaptive-timeout-floor", "", "minimum learned TCP timeout")
+	fs.StringVar(&o.gatewayFailureTTL, "gateway-failure-ttl", "", "coalesce and cache deterministic gateway failures (0 disables)")
+	fs.StringVar(&o.protocolCacheTTL, "protocol-cache-ttl", "", "cache successful auto-detected protocols (0 disables)")
+	fs.StringVar(&o.authCacheTTL, "auth-cache-ttl", "", "cache public Digest challenges without credentials (0 disables)")
+	fs.IntVar(&o.proxyDNSCacheEntries, "proxy-dns-cache-entries", 0, "maximum cached proxy DNS names")
+	fs.BoolVar(&o.workingOnly, "working-only", false, "minimal evidence mode: stop after valid response headers when safe")
+	fs.BoolVar(&o.stagedValidation, "staged-validation", false, "in matrix mode, require the first target before testing the rest")
 	fs.BoolVar(&o.retryPermanent, "retry-permanent", false, "repeat authentication, policy, and invalid-protocol failures")
 	fs.BoolVar(&o.stopOnSuccess, "stop-on-success", false, "stop remaining measurements once the reliability threshold is reached")
 	fs.BoolVar(&o.noDeduplicate, "no-deduplicate", false, "disable exact deduplication to use bounded parser memory")
@@ -269,6 +290,15 @@ func applySchedulingFlags(cfg *config.Config, o checkOptions) {
 	override(&cfg.TargetQuorum, o.targetQuorum, o.targetQuorum >= 0)
 	override(&cfg.RotationSamples, o.rotationSamples, o.rotationSamples >= 0)
 	override(&cfg.Prescreen, o.prescreen, o.prescreen || o.explicit["prescreen"])
+	override(&cfg.PrescreenReuse, o.prescreenReuse, o.explicit["prescreen-reuse"])
+	override(&cfg.AdaptivePrescreen, o.adaptivePrescreen, o.adaptivePrescreen || o.explicit["adaptive-prescreen"])
+	override(&cfg.AdaptiveConcurrency, o.adaptiveConcurrency, o.adaptiveConcurrency || o.explicit["adaptive-concurrency"])
+	override(&cfg.AdaptiveMinimum, o.adaptiveMinimum, o.adaptiveMinimum != 0)
+	override(&cfg.AdaptiveWindow, o.adaptiveWindow, o.adaptiveWindow != 0)
+	override(&cfg.AdaptiveTimeouts, o.adaptiveTimeouts, o.adaptiveTimeouts || o.explicit["adaptive-timeouts"])
+	override(&cfg.ProxyDNSCacheEntries, o.proxyDNSCacheEntries, o.proxyDNSCacheEntries != 0)
+	override(&cfg.WorkingOnly, o.workingOnly, o.workingOnly || o.explicit["working-only"])
+	override(&cfg.StagedValidation, o.stagedValidation, o.stagedValidation || o.explicit["staged-validation"])
 	override(&cfg.PrescreenWorkers, o.prescreenWorkers, o.prescreenWorkers != 0)
 	override(&cfg.PrescreenRetries, o.prescreenRetries, o.prescreenRetries >= 0)
 	override(&cfg.SkipConnectRetry, o.noConnectRetry, o.noConnectRetry || o.explicit["no-connect-retry"])
@@ -299,6 +329,7 @@ func applyEvidenceFlags(cfg *config.Config, o checkOptions) {
 	override(&cfg.DataDir, o.dataDir, o.dataDir != "")
 	override(&cfg.ProbeUDP, o.probeUDP, o.probeUDP || o.explicit["probe-udp"])
 	override(&cfg.TLSClassicalKEX, o.tlsClassicalKEX, o.tlsClassicalKEX || o.explicit["tls-classical-kex"])
+	override(&cfg.TLSSessionCache, o.tlsSessionCache, o.tlsSessionCache || o.explicit["tls-session-cache"])
 	override(&cfg.Save, o.save, o.save || o.explicit["save"])
 	override(&cfg.SaveGzip, o.saveGzip, o.saveGzip || o.explicit["save-gzip"])
 }
@@ -310,6 +341,10 @@ func applyTimingFlags(cfg *config.Config, o checkOptions) {
 	override(&cfg.AutoProbeRaw, o.autoProbeTimeout, o.autoProbeTimeout != "")
 	override(&cfg.DNSCacheTTLRaw, o.dnsCacheTTL, o.dnsCacheTTL != "")
 	override(&cfg.ProxyDNSCacheRaw, o.proxyDNSCacheTTL, o.proxyDNSCacheTTL != "")
+	override(&cfg.GatewayFailureRaw, o.gatewayFailureTTL, o.gatewayFailureTTL != "")
+	override(&cfg.ProtocolCacheRaw, o.protocolCacheTTL, o.protocolCacheTTL != "")
+	override(&cfg.AuthCacheRaw, o.authCacheTTL, o.authCacheTTL != "")
+	override(&cfg.AdaptiveTimeoutRaw, o.adaptiveTimeoutFloor, o.adaptiveTimeoutFloor != "")
 	override(&cfg.RetryBackoffRaw, o.retryBackoff, o.retryBackoff != "")
 	override(&cfg.ProgressRaw, o.progressInterval, o.progressInterval != "")
 	override(&cfg.CanaryRaw, o.canaryInterval, o.canaryInterval != "")
@@ -393,7 +428,11 @@ func applyProfile(cfg *config.Config, name string) error {
 		cfg.RequestTimeoutRaw = "8s"
 		cfg.RetryBackoffRaw = "0s"
 		cfg.ProxyDNSCacheRaw = "1m"
+		cfg.GatewayFailureRaw = "2s"
+		cfg.ProtocolCacheRaw = "10m"
+		cfg.AuthCacheRaw = "10m"
 		cfg.Prescreen = true
+		cfg.PrescreenReuse = true
 	case "balanced":
 		cfg.Repeat = 2
 		cfg.MinSuccessRate = 0.5
@@ -436,7 +475,7 @@ func runConfiguration(cfg config.Config, proto model.Protocol, o checkOptions) m
 		RetryBackoff: cfg.RetryBackoff.String(), StopOnSuccess: cfg.StopOnSuccess,
 		RetryPermanent: cfg.RetryPermanent, AllowRemoteDNS: cfg.AllowRemoteDNS, AllowPrivateProxy: cfg.AllowPrivateProxy,
 		NoCleartextCreds: cfg.NoCleartextCredentials, CertificatePins: len(cfg.PinSHA256), AllowDowngrade: cfg.AllowDowngrade, ProbeUDP: cfg.ProbeUDP, ExpectCountries: cfg.ExpectCountries, CanaryInterval: canaryInterval(cfg), SaveStatus: o.saveStatus, SaveGzip: cfg.Save && cfg.SaveGzip,
-		SkipConnectRetry: cfg.SkipConnectRetry, TLSClassicalKEX: cfg.TLSClassicalKEX, Prescreen: cfg.Prescreen, PrescreenWorkers: prescreenWorkers(cfg), PrescreenRetries: cfg.PrescreenRetries, ProxyDNSCacheTTL: cfg.ProxyDNSCacheTTL.String(),
+		SkipConnectRetry: cfg.SkipConnectRetry, TLSClassicalKEX: cfg.TLSClassicalKEX, Prescreen: cfg.Prescreen, PrescreenReuse: cfg.PrescreenReuse, AdaptivePrescreen: cfg.AdaptivePrescreen, PrescreenWorkers: prescreenWorkers(cfg), PrescreenRetries: cfg.PrescreenRetries, ProxyDNSCacheTTL: cfg.ProxyDNSCacheTTL.String(), GatewayFailureTTL: cfg.GatewayFailureTTL.String(), ProtocolCacheTTL: cfg.ProtocolCacheTTL.String(), AuthCacheTTL: cfg.AuthCacheTTL.String(), AdaptiveRuntime: cfg.AdaptiveConcurrency, AdaptiveTimeouts: cfg.AdaptiveTimeouts, WorkingOnly: cfg.WorkingOnly, StagedValidation: cfg.StagedValidation, TLSSessionCache: cfg.TLSSessionCache,
 		MaxResponseBytes: cfg.MaxResponseBytes, IntelligenceBytes: min(cfg.IntelligenceBytes, cfg.MaxResponseBytes), MinResponseBytes: cfg.MinResponseBytes, MinThroughput: cfg.MinThroughputKBPS,
 		ContentRules:    len(cfg.RequireText) + len(cfg.RejectText) + len(cfg.ExpectJSON),
 		MetadataEnabled: cfg.MetadataFile != "",

@@ -6,6 +6,9 @@ BUILD_DATE ?= $(shell git show -s --format=%cI HEAD 2>/dev/null || date -u +%Y-%
 MODULE := github.com/drag-team/netvex-go
 GOVULNCHECK := golang.org/x/vuln/cmd/govulncheck@v1.9.0
 STATICCHECK := honnef.co/go/tools/cmd/staticcheck@v0.8.2
+ANALYSIS_TOOLCHAIN ?= go1.26.10
+STATICCHECK_RUN ?= go run $(STATICCHECK)
+GOVULNCHECK_RUN ?= go run $(GOVULNCHECK)
 FUZZTIME ?= 30s
 COVERAGE_MIN ?= 75
 LDFLAGS := -s -w -X $(MODULE)/internal/buildinfo.Version=$(VERSION) -X $(MODULE)/internal/buildinfo.Commit=$(COMMIT) -X $(MODULE)/internal/buildinfo.Date=$(BUILD_DATE)
@@ -23,10 +26,10 @@ check: fmt-check vet test race
 verify: check lint vuln cover
 
 lint:
-	go run $(STATICCHECK) ./...
+	GOTOOLCHAIN=$(ANALYSIS_TOOLCHAIN) $(STATICCHECK_RUN) ./...
 
 vuln:
-	go run $(GOVULNCHECK) ./...
+	GOTOOLCHAIN=$(ANALYSIS_TOOLCHAIN) $(GOVULNCHECK_RUN) ./...
 
 cover:
 	@set -eu; tmp="$$(mktemp)"; trap 'rm -f "$$tmp"' EXIT; \

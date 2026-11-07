@@ -60,6 +60,8 @@ type Connector struct {
 	DialContext    func(context.Context, string, string) (net.Conn, error)
 	Dialer         *net.Dialer
 	ProxyDNS       *ProxyDNSCache
+	GatewayCache   *GatewayCache
+	DigestCache    *DigestCache
 	TLSConfig      *tls.Config
 	// ProtectCredentials refuses to send a password a passive observer could read.
 	ProtectCredentials bool
@@ -76,8 +78,10 @@ func CleartextRefused() error {
 
 // Dialed is a proxy connection opened before any protocol negotiation.
 type Dialed struct {
-	Conn    net.Conn
-	Connect time.Duration
+	Conn            net.Conn
+	Connect         time.Duration
+	SniffedProtocol model.Protocol
+	SOCKS5Method    byte
 }
 
 // Close releases a connection that was not handed to OpenDialed.
@@ -95,6 +99,11 @@ func (c Connector) Open(ctx context.Context, proxy model.Proxy, dest policy.Dest
 // Dial performs only proxy DNS and the TCP handshake. Separating it lets callers
 // reject dead gateways before they occupy any destination capacity.
 func (c Connector) Dial(ctx context.Context, proxy model.Proxy) (Dialed, error) {
+	if c.GatewayCache != nil {
+		copy := c
+		copy.GatewayCache = nil
+		return c.GatewayCache.Do(ctx, proxy.Address(), func() (Dialed, error) { return copy.Dial(ctx, proxy) })
+	}
 	start := time.Now()
 	connectCtx := ctx
 	cancelConnect := func() {}
@@ -136,6 +145,14 @@ func (c Connector) OpenDialed(ctx context.Context, proxy model.Proxy, dest polic
 // open negotiates one connection. A non-empty authorization replaces Basic, which
 // is how the retry after a Digest challenge presents its answer.
 func (c Connector) open(ctx context.Context, proxy model.Proxy, dest policy.Destination, pre *Dialed, authorization string) (TimedConn, error) {
+	cachedAuthorization := false
+	if authorization == "" && proxy.Credentials != nil && c.DigestCache != nil && (proxy.Protocol == model.ProtocolHTTP || proxy.Protocol == model.ProtocolHTTPS) {
+		if challenge, ok := c.DigestCache.Get(proxy.Address()); ok {
+			if answer, err := challenge.answer(proxy.Credentials, http.MethodConnect, connectAuthority(dest, c.AllowRemoteDNS)); err == nil {
+				authorization, cachedAuthorization = answer, true
+			}
+		}
+	}
 	var dialed Dialed
 	if pre != nil && pre.Conn != nil {
 		dialed, *pre = *pre, Dialed{}
@@ -197,8 +214,11 @@ func (c Connector) open(ctx context.Context, proxy model.Proxy, dest policy.Dest
 			}
 			tunnel, tunnelErr := httpConnect(conn, proxy, dest, c.AllowRemoteDNS, authorization)
 			var classified *Error
-			retryable := authorization == "" || probing
+			retryable := authorization == "" || probing || cachedAuthorization
 			if retryable && errors.As(tunnelErr, &classified) && classified.digest != nil {
+				if c.DigestCache != nil {
+					c.DigestCache.Put(proxy.Address(), classified.digest)
+				}
 				// A proxy usually closes after a 407, so the answer needs a new connection.
 				answer, answerErr := classified.digest.answer(proxy.Credentials, http.MethodConnect, connectAuthority(dest, c.AllowRemoteDNS))
 				if answerErr != nil {
@@ -207,6 +227,9 @@ func (c Connector) open(ctx context.Context, proxy model.Proxy, dest policy.Dest
 				_ = conn.Close()
 				ok = true
 				return c.open(ctx, proxy, dest, nil, answer)
+			}
+			if cachedAuthorization && tunnelErr != nil && c.DigestCache != nil {
+				c.DigestCache.Delete(proxy.Address())
 			}
 			if probing && errors.As(tunnelErr, &classified) && classified.Status == model.StatusAuthFailed {
 				return TimedConn{}, CleartextRefused()
@@ -241,7 +264,14 @@ func (c Connector) open(ctx context.Context, proxy model.Proxy, dest policy.Dest
 		}
 	case model.ProtocolSOCKS5:
 		var authErr error
-		authMethod, authErr = socks5Connect(conn, proxy, dest, c.AllowRemoteDNS)
+		if dialed.SniffedProtocol == model.ProtocolSOCKS5 {
+			authMethod, authErr = socks5Authenticate(conn, proxy, dialed.SOCKS5Method)
+			if authErr == nil {
+				authErr = socks5ConnectRequest(conn, dest, c.AllowRemoteDNS)
+			}
+		} else {
+			authMethod, authErr = socks5Connect(conn, proxy, dest, c.AllowRemoteDNS)
+		}
 		if authErr != nil {
 			return TimedConn{}, authErr
 		}
@@ -489,20 +519,34 @@ func ReadResponseReleased(conn net.Conn, req *http.Request, maxHeader int) (*htt
 // sending credentials or contacting any destination.
 var sniffProbe = []byte{5, 2, 0, 2, '\r', '\n', '\r', '\n'}
 
-// Sniff identifies the protocol spoken on conn, or returns "" when the reply is
-// silent or unrecognized. The result is a hint and the connection is spent.
+// Sniff identifies the protocol spoken on conn. The legacy API treats the
+// connection as spent; SniffDialed can continue an already-negotiated SOCKS5
+// greeting without reconnecting.
 func Sniff(conn net.Conn, timeout time.Duration) model.Protocol {
-	if err := conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+	dialed := Dialed{Conn: conn}
+	return SniffDialed(&dialed, timeout)
+}
+
+func SniffDialed(dialed *Dialed, timeout time.Duration) model.Protocol {
+	if dialed == nil || dialed.Conn == nil {
 		return ""
 	}
-	if err := writeFull(conn, sniffProbe); err != nil {
+	if err := dialed.Conn.SetDeadline(time.Now().Add(timeout)); err != nil {
+		return ""
+	}
+	if err := writeFull(dialed.Conn, sniffProbe); err != nil {
 		return ""
 	}
 	reply := make([]byte, 2)
-	if _, err := io.ReadFull(conn, reply); err != nil {
+	if _, err := io.ReadFull(dialed.Conn, reply); err != nil {
 		return ""
 	}
-	return classifySniff(reply[0], reply[1])
+	result := classifySniff(reply[0], reply[1])
+	if result == model.ProtocolSOCKS5 {
+		dialed.SniffedProtocol = result
+		dialed.SOCKS5Method = reply[1]
+	}
+	return result
 }
 
 func classifySniff(first, second byte) model.Protocol {
@@ -577,11 +621,18 @@ func socks5Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, re
 	if err != nil {
 		return "", err
 	}
+	if err := socks5ConnectRequest(conn, dest, remoteDNS); err != nil {
+		return "", err
+	}
+	return authMethod, nil
+}
+
+func socks5ConnectRequest(conn net.Conn, dest policy.Destination, remoteDNS bool) error {
 	port, _ := strconv.ParseUint(dest.Port, 10, 16)
 	req := []byte{5, 1, 0}
 	if remoteDNS {
 		if len(dest.Host) == 0 || len(dest.Host) > 255 {
-			return "", &Error{Stage: model.StageNegotiate, Status: model.StatusInvalid, Code: "socks5_domain_length", Detail: "SOCKS5 destination hostname is outside protocol limits"}
+			return &Error{Stage: model.StageNegotiate, Status: model.StatusInvalid, Code: "socks5_domain_length", Detail: "SOCKS5 destination hostname is outside protocol limits"}
 		}
 		req = append(req, 3, byte(len(dest.Host)))
 		req = append(req, dest.Host...)
@@ -596,12 +647,12 @@ func socks5Connect(conn net.Conn, proxy model.Proxy, dest policy.Destination, re
 	}
 	req = append(req, byte(port>>8), byte(port))
 	if err := writeFull(conn, req); err != nil {
-		return "", classifyNet(model.StageTunnel, "socks5_connect_write", err)
+		return classifyNet(model.StageTunnel, "socks5_connect_write", err)
 	}
 	if err := socks5ReadReply(conn); err != nil {
-		return "", err
+		return err
 	}
-	return authMethod, nil
+	return nil
 }
 
 // Results of a SOCKS5 UDP ASSOCIATE probe.
@@ -656,8 +707,12 @@ func socks5Negotiate(conn net.Conn, proxy model.Proxy) (string, error) {
 	if resp[0] != 5 {
 		return "", &Error{Stage: model.StageNegotiate, Status: model.StatusFailed, Code: "socks5_bad_version", Detail: "invalid SOCKS5 response version"}
 	}
+	return socks5Authenticate(conn, proxy, resp[1])
+}
+
+func socks5Authenticate(conn net.Conn, proxy model.Proxy, method byte) (string, error) {
 	authMethod := "none"
-	switch resp[1] {
+	switch method {
 	case 0:
 	case 2:
 		authMethod = "username_password"
@@ -681,7 +736,7 @@ func socks5Negotiate(conn net.Conn, proxy model.Proxy) (string, error) {
 	case 0xff:
 		return "", &Error{Stage: model.StageNegotiate, Status: model.StatusAuthFailed, Code: "socks5_no_acceptable_auth", Detail: "SOCKS5 proxy accepts none of the offered authentication methods"}
 	default:
-		return "", &Error{Stage: model.StageNegotiate, Status: model.StatusFailed, Code: "socks5_unsupported_auth", Detail: fmt.Sprintf("SOCKS5 proxy selected unsupported authentication method 0x%02x", resp[1])}
+		return "", &Error{Stage: model.StageNegotiate, Status: model.StatusFailed, Code: "socks5_unsupported_auth", Detail: fmt.Sprintf("SOCKS5 proxy selected unsupported authentication method 0x%02x", method)}
 	}
 	return authMethod, nil
 }

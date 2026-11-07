@@ -1,6 +1,6 @@
 # Project status
 
-Last verified: 2026-11-01
+Last verified: 2026-11-07
 
 ## Objective and architecture
 
@@ -13,7 +13,7 @@ human or machine output.
 Build metadata is derived from the source commit, and
 `make reproducibility-check` verifies byte-identical binaries for a fixed tree.
 
-The stable line is `1.0.1`, and result schema version 7 is current. The source,
+The stable line is `1.0.2`, and result schema version 7 is current. The source,
 release metadata, and documented command surface are aligned for the v1 release.
 It is not represented as a completed independent security audit.
 
@@ -28,6 +28,11 @@ It is not represented as a completed independent security audit.
   assertions, and transfer measurements.
 - Optional bounded single-flight proxy DNS caching with multi-address rotation,
   one shared concurrency-safe dialer, and one connect deadline across DNS/TCP.
+- Live prescreen-socket transfer; bounded gateway-failure, protocol, and Digest
+  challenge caches; optional TLS session resumption; and cancellation-safe
+  ownership cleanup.
+- Opt-in AIMD concurrency, learned connect timeouts, selective prescreen
+  retries, first-target matrix gating, and minimal-evidence working-list mode.
 - Evidence-based anonymity levels and offline longest-prefix exit metadata.
 - Target matrices, named declarative scenarios, quorum qualification, direct
   preflight, response hashes, custom CA bundles, and TLS evidence.
@@ -53,7 +58,7 @@ It is not represented as a completed independent security audit.
 
 - `make check`: passed (`gofmt`, `go vet`, all tests, and the race detector).
 - The complete suite passed 20 times with randomized test order.
-- `make cover`: 75.4% statement coverage; the 75% floor remains enforced in CI.
+- `make cover`: 75.6% statement coverage; the 75% floor remains enforced in CI.
 - `make cross-check`: passed for 17 OS/architecture targets, including test
   vetting on Linux 386/ARM, Windows amd64, and macOS ARM64.
 - `make reproducibility-check`: two independent builds were byte-identical.
@@ -64,9 +69,11 @@ It is not represented as a completed independent security audit.
   truncated, malformed, and oversized inputs with no failure.
 - SOCKS4/SOCKS5 reply, proxy-authentication, and Digest fuzzing: 512,371
   executions across four 10-second targets with no failure.
-- `staticcheck` and `govulncheck` remain mandatory CI gates. They could not be
-  rerun on this restricted host because their pinned tool modules were not
-  cached and the sandbox denied the configured module-proxy socket.
+- Pinned `staticcheck` v0.8.2 passed locally using the cached tool source and
+  Go 1.26.10 analysis toolchain. `govulncheck` remains a mandatory CI gate; its
+  scanner is cached locally, but the sandbox blocks access to the live Go
+  vulnerability database. Release binaries use patched Go 1.27.3 and the
+  project has no third-party runtime modules.
 - Controlled 500,000-item scheduler: 910,336 items/s median at concurrency 128
   across three runs on the non-isolated delivery host.
 - Offline IPv4 metadata lookup: 411 ns/op median, zero allocations across three
@@ -91,6 +98,9 @@ It is not represented as a completed independent security audit.
   238 ns/result for TXT, 3.11 us for JSON, 3.17 us for JSONL, and 1.82 us for CSV.
 - Expanded destination range policy checks measured 146.5 ns/op median with
   zero allocations, versus 1,003 ns/op before static address-family tables.
+- Prescreen socket transfer measured 87.7 us/op median and 14,593 B/op versus
+  96.5 us/op and 21,099 B/op for close-and-redial in the controlled in-memory
+  fixture; it also reduces two gateway dials to one.
 
 The benchmark conditions and historical results are in
 [BENCHMARKS.md](BENCHMARKS.md). Controlled local fixtures are used instead of

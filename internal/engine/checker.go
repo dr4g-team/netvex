@@ -44,6 +44,10 @@ type Checker struct {
 	expectedTargets   []string
 	IncludeInputProxy bool
 	IdentityKey       func() []byte
+	protocolMu        sync.Mutex
+	protocolCache     map[string]cachedProtocol
+	tlsSessionCache   tls.ClientSessionCache
+	connectEstimator  durationEstimator
 
 	expectCountries    map[string]struct{}
 	certificatePins    map[string]struct{}
@@ -55,6 +59,37 @@ type Checker struct {
 	canaryFailures     atomic.Int64
 	canaryOutages      atomic.Int64
 	canaryReclassified atomic.Int64
+}
+
+func (c *Checker) dialConnector() protocol.Connector {
+	connector := c.Connector
+	if c.Config.AdaptiveTimeouts {
+		connector.ConnectTimeout = c.connectEstimator.Timeout(c.Config.AdaptiveTimeoutFloor, c.Config.ConnectTimeout)
+	}
+	return connector
+}
+
+func (c *Checker) observeConnect(dialed protocol.Dialed) {
+	if c.Config.AdaptiveTimeouts {
+		c.connectEstimator.Observe(dialed.Connect)
+	}
+}
+
+func (c *Checker) observeConnectFailure(err error) {
+	if !c.Config.AdaptiveTimeouts {
+		return
+	}
+	var classified *protocol.Error
+	if errors.As(err, &classified) && classified.Status == model.StatusTimeout {
+		// A learned bound may be stale after a route or provider change. Return
+		// immediately to the configured ceiling instead of locking into failures.
+		c.connectEstimator.Reset()
+	}
+}
+
+type cachedProtocol struct {
+	protocol model.Protocol
+	expires  time.Time
 }
 
 type MetadataLookup interface {
@@ -69,7 +104,13 @@ func NewChecker(c config.Config) *Checker {
 	}
 	connector := protocol.Connector{ConnectTimeout: c.ConnectTimeout, AllowRemoteDNS: c.AllowRemoteDNS, ClassicalKEX: c.TLSClassicalKEX, ProtectCredentials: c.NoCleartextCredentials, Dialer: dialer}
 	if c.ProxyDNSCacheTTL > 0 {
-		connector.ProxyDNS = protocol.NewProxyDNSCache(c.ProxyDNSCacheTTL, min(c.MaxInputEntries, 4096))
+		connector.ProxyDNS = protocol.NewProxyDNSCache(c.ProxyDNSCacheTTL, min(c.MaxInputEntries, c.ProxyDNSCacheEntries))
+	}
+	if c.GatewayFailureTTL > 0 {
+		connector.GatewayCache = protocol.NewGatewayCache(c.GatewayFailureTTL, min(c.MaxInputEntries, 65536))
+	}
+	if c.AuthCacheTTL > 0 {
+		connector.DigestCache = protocol.NewDigestCache(c.AuthCacheTTL, min(c.MaxInputEntries, 65536))
 	}
 	checker := &Checker{
 		Config:          c,
@@ -82,6 +123,13 @@ func NewChecker(c config.Config) *Checker {
 		effectiveRules:  make(map[string]compiledResponseRules, len(c.Targets)),
 		targetNames:     make(map[string]string, len(c.Targets)),
 		expectedTargets: make([]string, 0, len(c.Targets)),
+	}
+	if c.ProtocolCacheTTL > 0 {
+		checker.protocolCache = make(map[string]cachedProtocol)
+	}
+	if c.TLSSessionCache {
+		checker.tlsSessionCache = tls.NewLRUClientSessionCache(min(max(c.Concurrency*2, 64), 4096))
+		checker.Connector.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS12, ClientSessionCache: checker.tlsSessionCache}
 	}
 	if len(c.ExpectCountries) > 0 {
 		checker.expectCountries = make(map[string]struct{}, len(c.ExpectCountries))
@@ -150,6 +198,17 @@ func (c *Checker) newResult(p model.Proxy, plan attemptPlan) model.Result {
 }
 
 func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
+	return c.check(ctx, p, nil)
+}
+
+func (c *Checker) CheckPrepared(ctx context.Context, prepared PreparedProxy) model.Result {
+	return c.check(ctx, prepared.Proxy, &prepared.Dialed)
+}
+
+func (c *Checker) check(ctx context.Context, p model.Proxy, prepared *protocol.Dialed) model.Result {
+	if prepared != nil {
+		defer prepared.Close()
+	}
 	plan := c.plan()
 	r := c.newResult(p, plan)
 	for i := 0; i < plan.attempts; i++ {
@@ -161,7 +220,8 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		if !c.waitTargetHealthy(ctx, target) || !c.waitTurn(ctx) {
 			break
 		}
-		obs := c.attempt(ctx, p, target, i+1)
+		obs := c.attemptPrepared(ctx, p, target, i+1, prepared)
+		prepared = nil
 		c.noteLocalExhaustion(obs)
 		c.reclassifyDuringOutage(&obs, target)
 		if r.Observations == nil {
@@ -180,6 +240,9 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		if !c.Config.RetryPermanent && globalPermanent {
 			break
 		}
+		if c.Config.StagedValidation && i == 0 && obs.Status != model.StatusOK {
+			break
+		}
 		if ctx.Err() != nil {
 			break
 		}
@@ -195,7 +258,9 @@ func (c *Checker) Check(ctx context.Context, p model.Proxy) model.Result {
 		}
 	}
 	c.conclude(ctx, &r, p, plan)
-	c.probeCapabilities(ctx, &r, p)
+	if !c.Config.WorkingOnly {
+		c.probeCapabilities(ctx, &r, p)
+	}
 	return r
 }
 
@@ -268,7 +333,7 @@ const (
 // before it occupies destination capacity. Most entries in a real list are dead,
 // and holding a slot through their connect timeout halves throughput. Time spent
 // queueing is reported separately and charged to neither latency nor the timeout.
-func (c *Checker) attempt(parent context.Context, p model.Proxy, target string, n int) model.Observation {
+func (c *Checker) attemptPrepared(parent context.Context, p model.Proxy, target string, n int, prepared *protocol.Dialed) model.Observation {
 	start := time.Now()
 	obs := model.Observation{Attempt: n, StartedAt: start.UTC(), Protocol: p.Protocol, Target: c.targetName(target), Status: model.StatusFailed, Stage: model.StageResolve, Anonymity: "unavailable"}
 	prepareCtx, cancelPrepare := context.WithTimeout(parent, c.Config.RequestTimeout)
@@ -282,16 +347,30 @@ func (c *Checker) attempt(parent context.Context, p model.Proxy, target string, 
 		return finishError(obs, start, &protocol.Error{Stage: model.StageResolve, Status: model.StatusInconclusive, Code: "destination_dns", Detail: "destination DNS resolution failed", Err: err})
 	}
 	obs.ResolvedIP = dest.IP.String()
-	dialed, err := c.Connector.Dial(prepareCtx, p)
-	if err != nil {
-		// No protocol can succeed without TCP, so auto mode stops here too.
-		return finishError(obs, start, err)
+	var dialed protocol.Dialed
+	if prepared != nil && prepared.Conn != nil {
+		dialed, *prepared = *prepared, protocol.Dialed{}
+	} else {
+		dialed, err = c.dialConnector().Dial(prepareCtx, p)
+		if err != nil {
+			c.observeConnectFailure(err)
+			// No protocol can succeed without TCP, so auto mode stops here too.
+			return finishError(obs, start, err)
+		}
+		c.observeConnect(dialed)
 	}
 	defer dialed.Close()
 	protos := []model.Protocol{p.Protocol}
 	if p.Protocol == model.ProtocolAuto {
-		protos = narrowProtocols(autoProtocols(p.Port, c.Config.AllowRemoteDNS), protocol.Sniff(dialed.Conn, min(sniffTimeout, c.Config.AutoProbeTimeout)))
-		dialed.Close()
+		if cached, ok := c.cachedProtocol(p); ok {
+			protos = []model.Protocol{cached}
+		} else {
+			hint := protocol.SniffDialed(&dialed, min(sniffTimeout, c.Config.AutoProbeTimeout))
+			protos = narrowProtocols(autoProtocols(p.Port, c.Config.AllowRemoteDNS), hint)
+			if hint != model.ProtocolSOCKS5 {
+				dialed.Close()
+			}
+		}
 	}
 	queueStart := time.Now()
 	release := c.acquireTarget(parent, dest.Host)
@@ -355,6 +434,9 @@ func (c *Checker) attempt(parent context.Context, p model.Proxy, target string, 
 		got.Timings.DNSMS = obs.Timings.DNSMS
 		got.Timings.QueueMS = obs.Timings.QueueMS
 		if e == nil {
+			if p.Protocol == model.ProtocolAuto {
+				c.rememberProtocol(p, protoName)
+			}
 			got.Timings.TotalMS = ms(time.Since(measured))
 			return got
 		}
@@ -380,6 +462,35 @@ func (c *Checker) attempt(parent context.Context, p model.Proxy, target string, 
 	}
 	bestObservation.Protocol = bestProtocol
 	return finishError(bestObservation, measured, best)
+}
+
+func (c *Checker) cachedProtocol(p model.Proxy) (model.Protocol, bool) {
+	if c.protocolCache == nil {
+		return "", false
+	}
+	c.protocolMu.Lock()
+	defer c.protocolMu.Unlock()
+	entry, ok := c.protocolCache[p.Address()]
+	if !ok || time.Now().After(entry.expires) {
+		delete(c.protocolCache, p.Address())
+		return "", false
+	}
+	return entry.protocol, true
+}
+
+func (c *Checker) rememberProtocol(p model.Proxy, value model.Protocol) {
+	if c.protocolCache == nil {
+		return
+	}
+	c.protocolMu.Lock()
+	if len(c.protocolCache) >= min(c.Config.MaxInputEntries, 65536) {
+		for key := range c.protocolCache {
+			delete(c.protocolCache, key)
+			break
+		}
+	}
+	c.protocolCache[p.Address()] = cachedProtocol{protocol: value, expires: time.Now().Add(c.Config.ProtocolCacheTTL)}
+	c.protocolMu.Unlock()
 }
 
 // narrowProtocols applies a sniffing hint. A proxy that clearly answered in one

@@ -33,6 +33,15 @@
     "configuration": {
       "additionalProperties": true,
       "properties": {
+        "adaptive_concurrency": {
+          "type": "boolean"
+        },
+        "adaptive_prescreen": {
+          "type": "boolean"
+        },
+        "adaptive_timeouts": {
+          "type": "boolean"
+        },
         "allow_private_proxies": {
           "type": "boolean"
         },
@@ -41,6 +50,9 @@
         },
         "allow_remote_dns": {
           "type": "boolean"
+        },
+        "auth_cache_ttl": {
+          "type": "string"
         },
         "auto_concurrency": {
           "type": "boolean"
@@ -71,6 +83,9 @@
             "type": "string"
           },
           "type": "array"
+        },
+        "gateway_failure_ttl": {
+          "type": "string"
         },
         "intelligence_body_bytes": {
           "type": "integer"
@@ -117,6 +132,9 @@
         "prescreen_retries": {
           "type": "integer"
         },
+        "prescreen_reuse": {
+          "type": "boolean"
+        },
         "probe_udp": {
           "type": "boolean"
         },
@@ -132,6 +150,9 @@
             "socks4a",
             "socks5"
           ],
+          "type": "string"
+        },
+        "protocol_cache_ttl": {
           "type": "string"
         },
         "proxy_dns_cache_ttl": {
@@ -173,6 +194,9 @@
         "skip_connect_retry": {
           "type": "boolean"
         },
+        "staged_validation": {
+          "type": "boolean"
+        },
         "stop_on_success": {
           "type": "boolean"
         },
@@ -185,11 +209,17 @@
         "tls_classical_kex": {
           "type": "boolean"
         },
+        "tls_session_cache": {
+          "type": "boolean"
+        },
         "validation_targets": {
           "items": {
             "type": "string"
           },
           "type": "array"
+        },
+        "working_only": {
+          "type": "boolean"
         }
       },
       "required": [

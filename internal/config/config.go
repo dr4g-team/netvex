@@ -18,49 +18,55 @@ import (
 )
 
 type Config struct {
-	Concurrency       int                      `json:"concurrency"`
-	QueueSize         int                      `json:"queue_size"`
-	PerTarget         int                      `json:"per_target_concurrency"`
-	RateLimit         float64                  `json:"requests_per_second"`
-	ConnectTimeout    time.Duration            `json:"-"`
-	RequestTimeout    time.Duration            `json:"-"`
-	AutoProbeTimeout  time.Duration            `json:"-"`
-	ConnectTimeoutRaw string                   `json:"connect_timeout"`
-	RequestTimeoutRaw string                   `json:"request_timeout"`
-	AutoProbeRaw      string                   `json:"auto_probe_timeout"`
-	Repeat            int                      `json:"repeat"`
-	MinSuccessRate    float64                  `json:"min_success_rate"`
-	Targets           []string                 `json:"targets"`
-	TargetRules       map[string]ResponseRules `json:"target_rules,omitempty"`
-	TargetLabels      map[string]string        `json:"target_labels,omitempty"`
-	MaxRedirects      int                      `json:"max_redirects"`
-	MaxInputBytes     int64                    `json:"max_input_bytes"`
-	MaxInputEntries   int                      `json:"max_input_entries"`
-	MaxResponseBytes  int64                    `json:"max_response_bytes"`
-	IntelligenceBytes int64                    `json:"intelligence_body_bytes"`
-	MinResponseBytes  int64                    `json:"min_response_bytes"`
-	MinThroughputKBPS float64                  `json:"min_throughput_kbps"`
-	ExpectedBodySHA   string                   `json:"expected_body_sha256,omitempty"`
-	RequireText       []string                 `json:"require_text,omitempty"`
-	RejectText        []string                 `json:"reject_text,omitempty"`
-	ExpectJSON        []string                 `json:"expect_json,omitempty"`
-	AnonymityBaseline string                   `json:"anonymity_baseline_ip,omitempty"`
-	MetadataFile      string                   `json:"metadata_file,omitempty"`
-	CABundle          string                   `json:"ca_bundle,omitempty"`
-	ProxyCABundle     string                   `json:"proxy_ca_bundle,omitempty"`
-	TargetMatrix      bool                     `json:"target_matrix"`
-	TargetQuorum      int                      `json:"target_quorum"`
-	RotationSamples   int                      `json:"rotation_samples"`
-	RotationInterval  time.Duration            `json:"-"`
-	RotationRaw       string                   `json:"rotation_interval"`
-	Preflight         string                   `json:"preflight"`
-	AutoConcurrency   bool                     `json:"-"`
-	ScenarioName      string                   `json:"-"`
-	AllowPrivate      bool                     `json:"allow_private_targets"`
-	AllowRemoteDNS    bool                     `json:"allow_remote_dns"`
-	AllowPrivateProxy bool                     `json:"allow_private_proxies"`
-	PinSHA256         []string                 `json:"pin_sha256,omitempty"`
-	AllowDowngrade    bool                     `json:"allow_redirect_downgrade"`
+	Concurrency          int                      `json:"concurrency"`
+	QueueSize            int                      `json:"queue_size"`
+	PerTarget            int                      `json:"per_target_concurrency"`
+	RateLimit            float64                  `json:"requests_per_second"`
+	ConnectTimeout       time.Duration            `json:"-"`
+	RequestTimeout       time.Duration            `json:"-"`
+	AutoProbeTimeout     time.Duration            `json:"-"`
+	ConnectTimeoutRaw    string                   `json:"connect_timeout"`
+	RequestTimeoutRaw    string                   `json:"request_timeout"`
+	AutoProbeRaw         string                   `json:"auto_probe_timeout"`
+	Repeat               int                      `json:"repeat"`
+	MinSuccessRate       float64                  `json:"min_success_rate"`
+	Targets              []string                 `json:"targets"`
+	TargetRules          map[string]ResponseRules `json:"target_rules,omitempty"`
+	TargetLabels         map[string]string        `json:"target_labels,omitempty"`
+	MaxRedirects         int                      `json:"max_redirects"`
+	MaxInputBytes        int64                    `json:"max_input_bytes"`
+	MaxInputEntries      int                      `json:"max_input_entries"`
+	MaxResponseBytes     int64                    `json:"max_response_bytes"`
+	IntelligenceBytes    int64                    `json:"intelligence_body_bytes"`
+	MinResponseBytes     int64                    `json:"min_response_bytes"`
+	MinThroughputKBPS    float64                  `json:"min_throughput_kbps"`
+	ExpectedBodySHA      string                   `json:"expected_body_sha256,omitempty"`
+	RequireText          []string                 `json:"require_text,omitempty"`
+	RejectText           []string                 `json:"reject_text,omitempty"`
+	ExpectJSON           []string                 `json:"expect_json,omitempty"`
+	AnonymityBaseline    string                   `json:"anonymity_baseline_ip,omitempty"`
+	MetadataFile         string                   `json:"metadata_file,omitempty"`
+	CABundle             string                   `json:"ca_bundle,omitempty"`
+	ProxyCABundle        string                   `json:"proxy_ca_bundle,omitempty"`
+	TargetMatrix         bool                     `json:"target_matrix"`
+	TargetQuorum         int                      `json:"target_quorum"`
+	RotationSamples      int                      `json:"rotation_samples"`
+	RotationInterval     time.Duration            `json:"-"`
+	RotationRaw          string                   `json:"rotation_interval"`
+	Preflight            string                   `json:"preflight"`
+	AutoConcurrency      bool                     `json:"-"`
+	AdaptiveConcurrency  bool                     `json:"adaptive_concurrency"`
+	AdaptiveMinimum      int                      `json:"adaptive_minimum"`
+	AdaptiveWindow       int                      `json:"adaptive_window"`
+	AdaptiveTimeouts     bool                     `json:"adaptive_timeouts"`
+	AdaptiveTimeoutFloor time.Duration            `json:"-"`
+	AdaptiveTimeoutRaw   string                   `json:"adaptive_timeout_floor"`
+	ScenarioName         string                   `json:"-"`
+	AllowPrivate         bool                     `json:"allow_private_targets"`
+	AllowRemoteDNS       bool                     `json:"allow_remote_dns"`
+	AllowPrivateProxy    bool                     `json:"allow_private_proxies"`
+	PinSHA256            []string                 `json:"pin_sha256,omitempty"`
+	AllowDowngrade       bool                     `json:"allow_redirect_downgrade"`
 	// NoCleartextCredentials refuses to send passwords to proxies without encryption.
 	NoCleartextCredentials bool          `json:"no_cleartext_credentials"`
 	RetryPermanent         bool          `json:"retry_permanent_failures"`
@@ -71,6 +77,8 @@ type Config struct {
 	CanaryInterval         time.Duration `json:"-"`
 	CanaryRaw              string        `json:"canary_interval"`
 	Prescreen              bool          `json:"prescreen"`
+	PrescreenReuse         bool          `json:"prescreen_reuse"`
+	AdaptivePrescreen      bool          `json:"adaptive_prescreen"`
 	PrescreenWorkers       int           `json:"prescreen_concurrency"`
 	PrescreenRetries       int           `json:"prescreen_retries"`
 	PrescreenTimeout       time.Duration `json:"-"`
@@ -82,6 +90,16 @@ type Config struct {
 	DNSCacheTTLRaw         string        `json:"dns_cache_ttl"`
 	ProxyDNSCacheTTL       time.Duration `json:"-"`
 	ProxyDNSCacheRaw       string        `json:"proxy_dns_cache_ttl"`
+	ProxyDNSCacheEntries   int           `json:"proxy_dns_cache_entries"`
+	GatewayFailureTTL      time.Duration `json:"-"`
+	GatewayFailureRaw      string        `json:"gateway_failure_ttl"`
+	ProtocolCacheTTL       time.Duration `json:"-"`
+	ProtocolCacheRaw       string        `json:"protocol_cache_ttl"`
+	AuthCacheTTL           time.Duration `json:"-"`
+	AuthCacheRaw           string        `json:"auth_cache_ttl"`
+	WorkingOnly            bool          `json:"working_only"`
+	StagedValidation       bool          `json:"staged_validation"`
+	TLSSessionCache        bool          `json:"tls_session_cache"`
 	AllowedHosts           []string      `json:"allowed_target_hosts"`
 	DataDir                string        `json:"data_dir"`
 	Save                   bool          `json:"save"`
@@ -138,7 +156,9 @@ func Defaults() Config {
 		ProxyDNSCacheRaw: "0s",
 		RetryBackoff:     100 * time.Millisecond, RetryBackoffRaw: "100ms",
 		RotationRaw: "0s", Preflight: "off",
-		PrescreenWorkers: 4096, PrescreenRetries: 1, PrescreenRaw: "0s", CanaryRaw: "0s",
+		PrescreenWorkers: 4096, PrescreenRetries: 1, PrescreenReuse: true, PrescreenRaw: "0s", CanaryRaw: "0s",
+		AdaptiveMinimum: 32, AdaptiveWindow: 64, ProxyDNSCacheEntries: 4096,
+		GatewayFailureRaw: "0s", ProtocolCacheRaw: "0s", AuthCacheRaw: "0s", AdaptiveTimeoutFloor: 100 * time.Millisecond, AdaptiveTimeoutRaw: "100ms",
 		DataDir: defaultDataDir(), ProgressInterval: 500 * time.Millisecond, ProgressRaw: "500ms",
 	}
 }
@@ -201,6 +221,9 @@ func applyEnv(c *Config) error {
 			{"NETVEX_MAX_INPUT_ENTRIES", &c.MaxInputEntries},
 			{"NETVEX_PRESCREEN_CONCURRENCY", &c.PrescreenWorkers},
 			{"NETVEX_PRESCREEN_RETRIES", &c.PrescreenRetries},
+			{"NETVEX_ADAPTIVE_MINIMUM", &c.AdaptiveMinimum},
+			{"NETVEX_ADAPTIVE_WINDOW", &c.AdaptiveWindow},
+			{"NETVEX_PROXY_DNS_CACHE_ENTRIES", &c.ProxyDNSCacheEntries},
 		}),
 		bindEnv(parseInt64, []envBinding[int64]{
 			{"NETVEX_MAX_INPUT_BYTES", &c.MaxInputBytes},
@@ -223,6 +246,13 @@ func applyEnv(c *Config) error {
 			{"NETVEX_SKIP_CONNECT_RETRY", &c.SkipConnectRetry},
 			{"NETVEX_TLS_CLASSICAL_KEX", &c.TLSClassicalKEX},
 			{"NETVEX_PRESCREEN", &c.Prescreen},
+			{"NETVEX_PRESCREEN_REUSE", &c.PrescreenReuse},
+			{"NETVEX_ADAPTIVE_PRESCREEN", &c.AdaptivePrescreen},
+			{"NETVEX_ADAPTIVE_CONCURRENCY", &c.AdaptiveConcurrency},
+			{"NETVEX_ADAPTIVE_TIMEOUTS", &c.AdaptiveTimeouts},
+			{"NETVEX_WORKING_ONLY", &c.WorkingOnly},
+			{"NETVEX_STAGED_VALIDATION", &c.StagedValidation},
+			{"NETVEX_TLS_SESSION_CACHE", &c.TLSSessionCache},
 			{"NETVEX_PROBE_UDP", &c.ProbeUDP},
 			{"NETVEX_STOP_ON_SUCCESS", &c.StopOnSuccess},
 			{"NETVEX_SAVE", &c.Save},
@@ -239,6 +269,10 @@ func applyEnv(c *Config) error {
 			{"NETVEX_PROXY_CA_BUNDLE", &c.ProxyCABundle},
 			{"NETVEX_DNS_CACHE_TTL", &c.DNSCacheTTLRaw},
 			{"NETVEX_PROXY_DNS_CACHE_TTL", &c.ProxyDNSCacheRaw},
+			{"NETVEX_GATEWAY_FAILURE_TTL", &c.GatewayFailureRaw},
+			{"NETVEX_PROTOCOL_CACHE_TTL", &c.ProtocolCacheRaw},
+			{"NETVEX_AUTH_CACHE_TTL", &c.AuthCacheRaw},
+			{"NETVEX_ADAPTIVE_TIMEOUT_FLOOR", &c.AdaptiveTimeoutRaw},
 			{"NETVEX_CANARY_INTERVAL", &c.CanaryRaw},
 			{"NETVEX_PRESCREEN_TIMEOUT", &c.PrescreenRaw},
 			{"NETVEX_RETRY_BACKOFF", &c.RetryBackoffRaw},
@@ -320,6 +354,18 @@ func (c *Config) ParseDurations() error {
 	if c.ProxyDNSCacheTTL, err = time.ParseDuration(c.ProxyDNSCacheRaw); err != nil {
 		return fmt.Errorf("invalid proxy_dns_cache_ttl: %w", err)
 	}
+	if c.GatewayFailureTTL, err = time.ParseDuration(c.GatewayFailureRaw); err != nil {
+		return fmt.Errorf("invalid gateway_failure_ttl: %w", err)
+	}
+	if c.ProtocolCacheTTL, err = time.ParseDuration(c.ProtocolCacheRaw); err != nil {
+		return fmt.Errorf("invalid protocol_cache_ttl: %w", err)
+	}
+	if c.AuthCacheTTL, err = time.ParseDuration(c.AuthCacheRaw); err != nil {
+		return fmt.Errorf("invalid auth_cache_ttl: %w", err)
+	}
+	if c.AdaptiveTimeoutFloor, err = time.ParseDuration(c.AdaptiveTimeoutRaw); err != nil {
+		return fmt.Errorf("invalid adaptive_timeout_floor: %w", err)
+	}
 	if c.RetryBackoff, err = time.ParseDuration(c.RetryBackoffRaw); err != nil {
 		return fmt.Errorf("invalid retry_backoff: %w", err)
 	}
@@ -377,6 +423,12 @@ func (c Config) validateScheduling() error {
 	if math.IsNaN(c.RateLimit) || math.IsInf(c.RateLimit, 0) || c.RateLimit < 0 || c.RateLimit > 100000 || (c.RateLimit > 0 && c.RateLimit < 0.1) {
 		return errors.New("requests_per_second must be 0 (disabled) or between 0.1 and 100000")
 	}
+	if c.AdaptiveMinimum < 1 || c.AdaptiveMinimum > 4096 {
+		return errors.New("adaptive_minimum must be between 1 and 4096; it is clamped to concurrency at runtime")
+	}
+	if c.AdaptiveWindow < 8 || c.AdaptiveWindow > 4096 {
+		return errors.New("adaptive_window must be between 8 and 4096")
+	}
 	return nil
 }
 
@@ -396,6 +448,18 @@ func (c Config) validateTiming() error {
 	}
 	if c.ProxyDNSCacheTTL < 0 || c.ProxyDNSCacheTTL > 24*time.Hour {
 		return errors.New("proxy_dns_cache_ttl must be between 0 and 24h")
+	}
+	if c.GatewayFailureTTL < 0 || c.GatewayFailureTTL > time.Hour {
+		return errors.New("gateway_failure_ttl must be between 0 and 1h")
+	}
+	if c.ProtocolCacheTTL < 0 || c.ProtocolCacheTTL > 24*time.Hour {
+		return errors.New("protocol_cache_ttl must be between 0 and 24h")
+	}
+	if c.AuthCacheTTL < 0 || c.AuthCacheTTL > 24*time.Hour {
+		return errors.New("auth_cache_ttl must be between 0 and 24h")
+	}
+	if c.AdaptiveTimeoutFloor < 100*time.Millisecond || c.AdaptiveTimeoutFloor > c.ConnectTimeout {
+		return errors.New("adaptive_timeout_floor must be between 100ms and connect_timeout")
 	}
 	if c.RetryBackoff < 0 || c.RetryBackoff > 30*time.Second {
 		return errors.New("retry_backoff must be between 0 and 30s")
@@ -435,6 +499,12 @@ func (c Config) validatePrescreen() error {
 	}
 	if c.PrescreenTimeout != 0 && (c.PrescreenTimeout < 100*time.Millisecond || c.PrescreenTimeout > 2*time.Minute) {
 		return errors.New("prescreen_timeout must be 0 (use connect_timeout) or between 100ms and 2m")
+	}
+	if c.ProxyDNSCacheEntries < 1 || c.ProxyDNSCacheEntries > 1_000_000 {
+		return errors.New("proxy_dns_cache_entries must be between 1 and 1000000")
+	}
+	if c.StagedValidation && (!c.TargetMatrix || len(c.Targets) < 2) {
+		return errors.New("staged_validation requires target_matrix and at least two targets")
 	}
 	return nil
 }
@@ -678,6 +748,10 @@ func (c Config) MarshalJSON() ([]byte, error) {
 	a.ProgressRaw = c.ProgressInterval.String()
 	a.DNSCacheTTLRaw = c.DNSCacheTTL.String()
 	a.ProxyDNSCacheRaw = c.ProxyDNSCacheTTL.String()
+	a.GatewayFailureRaw = c.GatewayFailureTTL.String()
+	a.ProtocolCacheRaw = c.ProtocolCacheTTL.String()
+	a.AuthCacheRaw = c.AuthCacheTTL.String()
+	a.AdaptiveTimeoutRaw = c.AdaptiveTimeoutFloor.String()
 	a.RetryBackoffRaw = c.RetryBackoff.String()
 	a.RotationRaw = c.RotationInterval.String()
 	a.PrescreenRaw = c.PrescreenTimeout.String()
